@@ -25,6 +25,7 @@ static int command_start_acquisition(const struct sr_dev_inst *sdi);
 
 SR_PRIV int sipeed_slogic_analyzer_receive_data(int fd, int revents, void *cb_data)
 {
+	// sr_dbg("Enter func %s", __func__);
 	const struct sr_dev_inst *sdi;
 	struct dev_context *devc;
 	struct drv_context *drvc;
@@ -50,11 +51,13 @@ SR_PRIV int sipeed_slogic_analyzer_receive_data(int fd, int revents, void *cb_da
 	};
 	libusb_handle_events_timeout(drvc->sr_ctx->libusb_ctx, &tv);
 
+	// sr_dbg("Leave func %s", __func__);
 	return TRUE;
 }
 
 SR_PRIV int sipeed_slogic_acquisition_start(const struct sr_dev_inst *sdi)
 {
+	// sr_dbg("Enter func %s", __func__);
 	/* TODO: configure hardware, reset acquisition state, set up
 	 * callbacks and send header packet. */
 
@@ -124,11 +127,13 @@ SR_PRIV int sipeed_slogic_acquisition_start(const struct sr_dev_inst *sdi)
 		return ret;
 	}
 
+	// sr_dbg("Leave func %s", __func__);
 	return SR_OK;
 }
 
 SR_PRIV int sipeed_slogic_acquisition_stop(struct sr_dev_inst *sdi)
 {
+	// sr_dbg("Enter func %s", __func__);
 	/* TODO: stop acquisition. */
 
 	(void)sdi;DBG_VAL(sdi);
@@ -139,11 +144,13 @@ SR_PRIV int sipeed_slogic_acquisition_stop(struct sr_dev_inst *sdi)
 		if (devc->transfers[i])
 			libusb_cancel_transfer(devc->transfers[i]);
 	}
+	// sr_dbg("Leave func %s", __func__);
 	return SR_OK;
 }
 
 static void finish_acquisition(struct sr_dev_inst *sdi)
 {
+	// sr_dbg("Enter func %s", __func__);
 	struct dev_context *devc;
 
 	devc = sdi->priv;
@@ -159,10 +166,12 @@ static void finish_acquisition(struct sr_dev_inst *sdi)
 		soft_trigger_logic_free(devc->stl);
 		devc->stl = NULL;
 	}
+	// sr_dbg("Leave func %s", __func__);
 }
 
 static void free_transfer(struct libusb_transfer *transfer)
 {
+	// sr_dbg("Enter func %s", __func__);
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
 	unsigned int i;
@@ -184,10 +193,12 @@ static void free_transfer(struct libusb_transfer *transfer)
 	devc->submitted_transfers--;
 	if (devc->submitted_transfers == 0)
 		finish_acquisition(sdi);
+	// sr_dbg("Leave func %s", __func__);
 }
 
 static void resubmit_transfer(struct libusb_transfer *transfer)
 {
+	// sr_dbg("Enter func %s", __func__);
 	int ret;
 
 	if ((ret = libusb_submit_transfer(transfer)) == LIBUSB_SUCCESS)
@@ -195,11 +206,13 @@ static void resubmit_transfer(struct libusb_transfer *transfer)
 
 	sr_err("%s: %s", __func__, libusb_error_name(ret));
 	free_transfer(transfer);
+	// sr_dbg("Leave func %s", __func__);
 }
 
 static void la_send_data_proc(struct sr_dev_inst *sdi,
 	uint8_t *data, size_t length, size_t sample_width)
 {
+	// sr_dbg("Enter func %s", __func__);
 	const struct sr_datafeed_logic logic = {
 		.length = length,
 		.unitsize = sample_width,
@@ -212,10 +225,12 @@ static void la_send_data_proc(struct sr_dev_inst *sdi,
 	};
 
 	sr_session_send(sdi, &packet);
+	// sr_dbg("Leave func %s", __func__);
 }
 
 static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer)
 {
+	// sr_dbg("Enter func %s", __func__);
 	struct sr_dev_inst *sdi = transfer->user_data;
 	struct dev_context *devc = sdi->priv;
 	gboolean packet_has_error = FALSE;
@@ -232,8 +247,7 @@ static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer)
 		return;
 	}
 
-	sr_dbg("receive_transfer(): status %s received %d bytes.",
-		libusb_error_name(transfer->status), transfer->actual_length);
+	// sr_dbg("receive_transfer(): status %s received %d bytes.", libusb_error_name(transfer->status), transfer->actual_length);
 
 	/* Save incoming transfer before reusing the transfer struct. */
 	unitsize = 1+(((1<<devc->logic_pattern)-1)>>3);
@@ -344,12 +358,14 @@ check_trigger:
 		free_transfer(transfer);
 	} else
 		resubmit_transfer(transfer);
+	// sr_dbg("Leave func %s", __func__);
 }
 
 #define USB_TIMEOUT 100
 
 static int command_start_acquisition(const struct sr_dev_inst *sdi)
 {
+	// sr_dbg("Enter func %s", __func__);
 	struct dev_context *devc;
 	struct sr_usb_dev_inst *usb;
 	uint64_t samplerate, samplechannel;
@@ -368,9 +384,9 @@ static int command_start_acquisition(const struct sr_dev_inst *sdi)
 		return SR_ERR;
 	}
 
-	if ((SR_MHZ(160) % samplerate) != 0 || samplechannel * samplerate > 40 * 8 * 1000 * 1000) {
+	if (samplerate > SR_MHZ(160) || samplechannel * samplerate > SR_MHZ(40 * 8)) {
 		sr_err("Unable to sample at %" PRIu64 "Hz.", samplerate);
-		return SR_ERR;
+		// return SR_ERR;
 	}
 
 	sr_dbg("SLogic samplerate(%dch) = %d, clocksource = %sMHz.", samplechannel, samplerate, "160");
@@ -390,5 +406,6 @@ static int command_start_acquisition(const struct sr_dev_inst *sdi)
 		return SR_ERR;
 	}
 
+	// sr_dbg("Leave func %s", __func__);
 	return SR_OK;
 }

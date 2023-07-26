@@ -60,13 +60,6 @@ static const int32_t trigger_matches[] = {
 };
 
 static const uint64_t samplerates[] = {
-	// SR_KHZ(20),
-	// SR_KHZ(25),
-	// SR_KHZ(50),
-	// SR_KHZ(100),
-	// SR_KHZ(200),
-	// SR_KHZ(250),
-	// SR_KHZ(500),
 	/* 160M = 2*2*2*2*2*5M */
 	SR_MHZ(1),
 	SR_MHZ(2),
@@ -78,8 +71,11 @@ static const uint64_t samplerates[] = {
 	SR_MHZ(20),
 	SR_MHZ(32),
 	SR_MHZ(40),
-	/* must less than 47MHZ */
+	/* x 4ch */
+	SR_MHZ(64),
 	SR_MHZ(80),
+	/* x 2ch */
+	SR_MHZ(128),
 	SR_MHZ(160),
 };
 
@@ -87,6 +83,7 @@ static struct sr_dev_driver sipeed_slogic_analyzer_driver_info;
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
+	// sr_dbg("Enter func %s with di: %p, options: %p", __func__, di, options);
 	struct drv_context *drvc;
 	GSList *devices;
 
@@ -101,7 +98,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	const char *conn = NULL;
 	int num_logic_channels = 8;
 	for (GSList *l = options; l; l = l->next) {
-		struct sr_config *src = l->data;DBG_VAL(src->key);
+		struct sr_config *src = l->data;
 		switch (src->key) {
 		case SR_CONF_NUM_LOGIC_CHANNELS:
 			num_logic_channels = g_variant_get_int32(src->data);
@@ -168,11 +165,13 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	}
 	// g_slist_free_full(conn_devices, (GDestroyNotify)sr_usb_dev_inst_free);
 
+	// sr_dbg("Leave func %s", __func__);
 	return std_scan_complete(di, devices);
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
 {
+	// sr_dbg("Enter func %s with sdi: %p", __func__, sdi);
 	(void)sdi;
 
 	/* TODO: get handle from sdi->conn and open it. */
@@ -182,11 +181,11 @@ static int dev_open(struct sr_dev_inst *sdi)
 	struct sr_dev_driver *di = sdi->driver;
 	struct drv_context *drvc = di->context;
 
-	ret = sr_usb_open(drvc->sr_ctx->libusb_ctx, usb);DBG_VAL(ret);
+	ret = sr_usb_open(drvc->sr_ctx->libusb_ctx, usb);
 	if (ret != SR_OK)
 		return ret;
 
-	ret = libusb_claim_interface(usb->devhdl, 0);DBG_VAL(ret);
+	ret = libusb_claim_interface(usb->devhdl, 0);
 	if (ret != LIBUSB_SUCCESS) {
 		switch (ret) {
 		case LIBUSB_ERROR_BUSY:
@@ -211,11 +210,13 @@ static int dev_open(struct sr_dev_inst *sdi)
 	devc->limit_frames = 1;
 	devc->capture_ratio = 0;
 	
+	// sr_dbg("Leave func %s", __func__);
 	return std_dummy_dev_open(sdi);
 }
 
 static int dev_close(struct sr_dev_inst *sdi)
 {
+	// sr_dbg("Enter func %s with sdi: %p", __func__, sdi);
 	(void)sdi;
 
 	/* TODO: get handle from sdi->conn and close it. */
@@ -223,21 +224,23 @@ static int dev_close(struct sr_dev_inst *sdi)
 	struct sr_usb_dev_inst *usb = sdi->conn;
 	struct dev_context *devc= sdi->priv;
 
-	ret = libusb_release_interface(usb->devhdl, 0);DBG_VAL(ret);
+	ret = libusb_release_interface(usb->devhdl, 0);
 	if (ret != LIBUSB_SUCCESS) {
 		sr_err("Unable to release Interface for %s.",
 			       libusb_error_name(ret));
-		return SR_ERR;
+		// return SR_ERR;
 	}
 
 	sr_usb_close(usb);
 
+	// sr_dbg("Leave func %s", __func__);
 	return std_dummy_dev_close(sdi);
 }
 
 static int config_get(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
+	// sr_dbg("Enter func %s with key: %u, data: %p, sdi: %p, cg: %p", __func__, key, data, sdi, cg);
 	int ret;
 
 	(void)sdi;
@@ -247,7 +250,7 @@ static int config_get(uint32_t key, GVariant **data,
 	struct sr_usb_dev_inst *usb = sdi->conn;
 	struct dev_context *devc= sdi->priv;
 	struct sr_channel *ch;
-	ret = SR_OK;DBG_VAL(key);
+	ret = SR_OK;
 	switch (key) {
 	/* TODO */
 	case SR_CONF_CONN:
@@ -284,12 +287,14 @@ static int config_get(uint32_t key, GVariant **data,
 		return SR_ERR_NA;
 	}
 
+	// sr_dbg("Leave func %s", __func__);
 	return ret;
 }
 
 static int config_set(uint32_t key, GVariant *data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
+	sr_dbg("Enter func %s with key: %u, data: %p, sdi: %p, cg: %p", __func__, key, data, sdi, cg);
 	int ret;
 
 	(void)sdi;
@@ -298,13 +303,24 @@ static int config_set(uint32_t key, GVariant *data,
 
 	struct dev_context *devc= sdi->priv;
 	int logic_pattern;
-	ret = SR_OK;DBG_VAL(key);
+	ret = SR_OK;
 	switch (key) {
 	/* TODO */
 	case SR_CONF_SAMPLERATE:
 		if (std_u64_idx(data, ARRAY_AND_SIZE(samplerates)) < 0)
 			return SR_ERR_ARG;
 		devc->cur_samplerate = g_variant_get_uint64(data);
+		if (devc->cur_samplerate >= SR_MHZ(128)) {
+			sr_dbg("set 2 ch");
+			sdi->driver->config_set(SR_CONF_PATTERN_MODE,
+				g_variant_new_string(logic_pattern_str[1]),
+				sdi, sdi->channel_groups->data);
+		} else if (devc->cur_samplerate >= SR_MHZ(64)) {
+			sr_dbg("set 4 ch");
+			sdi->driver->config_set(SR_CONF_PATTERN_MODE,
+				g_variant_new_string(logic_pattern_str[2]),
+				sdi, sdi->channel_groups->data);
+		}
 		break;
 	case SR_CONF_LIMIT_SAMPLES:
 		devc->limit_samples = g_variant_get_uint64(data);
@@ -316,8 +332,7 @@ static int config_set(uint32_t key, GVariant *data,
 		if (logic_pattern < 0)
 			return SR_ERR_ARG;
 		if (((struct sr_channel *)cg->channels->data)->type == SR_CHANNEL_LOGIC) {
-			sr_dbg("Setting logic pattern to %s",
-					logic_pattern_str[logic_pattern]);
+			// sr_dbg("Setting logic pattern to %s", logic_pattern_str[logic_pattern]);
 			devc->logic_pattern = logic_pattern;
 			/* Might as well do this now, these are static. */
 			size_t idx = 0;
@@ -341,12 +356,14 @@ static int config_set(uint32_t key, GVariant *data,
 		ret = SR_ERR_NA;
 	}
 
+	// sr_dbg("Leave func %s", __func__);
 	return ret;
 }
 
 static int config_list(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
+	// sr_dbg("Enter func %s with key: %x, data: %p, sdi: %p, cg: %p", __func__, key, data, sdi, cg);
 	int ret;
 
 	(void)sdi;
@@ -354,7 +371,7 @@ static int config_list(uint32_t key, GVariant **data,
 	(void)cg;
 
 	struct sr_channel *ch;
-	ret = SR_OK;DBG_VAL(key);
+	ret = SR_OK;
 	switch (key) {
 	/* TODO */
 	case SR_CONF_SCAN_OPTIONS:
@@ -370,6 +387,7 @@ static int config_list(uint32_t key, GVariant **data,
 	case SR_CONF_SAMPLERATE:
 		*data = std_gvar_samplerates(ARRAY_AND_SIZE(samplerates));
 		break;
+	// sr_dbg("Leave func %s", __func__);
 	case SR_CONF_TRIGGER_MATCH:
 		*data = std_gvar_array_i32(ARRAY_AND_SIZE(trigger_matches));
 		break;
@@ -386,6 +404,7 @@ static int config_list(uint32_t key, GVariant **data,
 		return SR_ERR_NA;
 	}
 
+	// sr_dbg("Leave func %s", __func__);
 	return ret;
 }
 
