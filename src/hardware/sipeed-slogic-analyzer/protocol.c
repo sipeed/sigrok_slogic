@@ -64,68 +64,118 @@ SR_PRIV int sipeed_slogic_acquisition_start(const struct sr_dev_inst *sdi)
 	(void)sdi;DBG_VAL(sdi);
 	struct dev_context *devc = sdi->priv;
 
-	int timeout = get_timeout(devc);
-	usb_source_add(sdi->session, sdi->session->ctx, timeout, sipeed_slogic_analyzer_receive_data, sdi);
+	// int timeout = get_timeout(devc);
+	// usb_source_add(sdi->session, sdi->session->ctx, timeout, sipeed_slogic_analyzer_receive_data, sdi);
 
-	struct sr_usb_dev_inst *usb = sdi->conn;
-	devc->sent_samples = 0;
-	devc->acq_aborted = FALSE;
-	devc->empty_transfer_count = 0;
+	// struct sr_usb_dev_inst *usb = sdi->conn;
+	// devc->sent_samples = 0;
+	// devc->acq_aborted = FALSE;
+	// devc->empty_transfer_count = 0;
 
-	struct sr_trigger *trigger;
-	if ((trigger = sr_session_trigger_get(sdi->session))) {
-		int pre_trigger_samples = 0;
-		if (devc->limit_samples > 0)
-			pre_trigger_samples = (devc->capture_ratio * devc->limit_samples) / 100;
-		devc->stl = soft_trigger_logic_new(sdi, trigger, pre_trigger_samples);
-		if (!devc->stl)
-			return SR_ERR_MALLOC;
-		devc->trigger_fired = FALSE;
-	} else {
-		std_session_send_df_frame_begin(sdi);
-		devc->trigger_fired = TRUE;
-	}
+	// struct sr_trigger *trigger;
+	// if ((trigger = sr_session_trigger_get(sdi->session))) {
+	// 	int pre_trigger_samples = 0;
+	// 	if (devc->limit_samples > 0)
+	// 		pre_trigger_samples = (devc->capture_ratio * devc->limit_samples) / 100;
+	// 	devc->stl = soft_trigger_logic_new(sdi, trigger, pre_trigger_samples);
+	// 	if (!devc->stl)
+	// 		return SR_ERR_MALLOC;
+	// 	devc->trigger_fired = FALSE;
+	// } else {
+	// 	std_session_send_df_frame_begin(sdi);
+	// 	devc->trigger_fired = TRUE;
+	// }
 
-	devc->submitted_transfers = 0;
-	size_t num_transfers = get_number_of_transfers(devc);
-	devc->num_transfers = num_transfers;
-	devc->transfers = g_try_malloc0(sizeof(*devc->transfers) * devc->num_transfers);
-	if (!devc->transfers) {
-		sr_err("USB transfers malloc failed.");
-		return SR_ERR_MALLOC;
-	}
-	size_t size = get_buffer_size(devc);
-	for (int i = 0; i < devc->num_transfers; i++) {
-		uint8_t *buf = g_try_malloc(size * (8+1)); /* max 8xu1 */
-		if (!buf) {
-			sr_err("USB transfer buffer malloc failed.");
-			return SR_ERR_MALLOC;
-		}
-		struct libusb_transfer *transfer = libusb_alloc_transfer(0);
-		libusb_fill_bulk_transfer(transfer, usb->devhdl,
-				1 | LIBUSB_ENDPOINT_IN, buf, size,
-				receive_transfer, (void *)sdi, timeout);
-		sr_info("submitting transfer: %d", i);
-		int ret = 0;
-		if ((ret = libusb_submit_transfer(transfer)) != 0) {
-			sr_err("Failed to submit transfer: %s.",
-			       libusb_error_name(ret));
-			libusb_free_transfer(transfer);
-			g_free(buf);
-			sipeed_slogic_acquisition_stop(sdi);
-			return SR_ERR;
-		}
-		devc->transfers[i] = transfer;
-		devc->submitted_transfers++;
-	}
+	// devc->submitted_transfers = 0;
+	// size_t num_transfers = get_number_of_transfers(devc);
+	// devc->num_transfers = num_transfers;
+	// devc->transfers = g_try_malloc0(sizeof(*devc->transfers) * devc->num_transfers);
+	// if (!devc->transfers) {
+	// 	sr_err("USB transfers malloc failed.");
+	// 	return SR_ERR_MALLOC;
+	// }
 
+	// sr_dbg("Clear EP");
+	// {
+	//  	uint8_t tmp[512];
+	// 	int actual_length = 0;
+	// 	do {
+	// 		libusb_bulk_transfer(usb->devhdl, 1| LIBUSB_ENDPOINT_IN, tmp, sizeof(tmp),
+	// 							&actual_length, 1000);
+	// 	} while (actual_length);
+	// }
+	// sr_dbg("Cleared EP");
+
+	// size_t size = get_buffer_size(devc);
+	// for (int i = 0; i < devc->num_transfers; i++) {
+	// 	uint8_t *buf = g_try_malloc(size * (8+1)); /* max 8xu1 */
+	// 	if (!buf) {
+	// 		sr_err("USB transfer buffer malloc failed.");
+	// 		return SR_ERR_MALLOC;
+	// 	}
+	// 	struct libusb_transfer *transfer = libusb_alloc_transfer(0);
+	// 	libusb_fill_bulk_transfer(transfer, usb->devhdl,
+	// 			1 | LIBUSB_ENDPOINT_IN, buf, size,
+	// 			receive_transfer, (void *)sdi, timeout);
+	// 	sr_info("submitting transfer: %d", i);
+	// 	int ret = 0;
+	// 	if ((ret = libusb_submit_transfer(transfer)) != 0) {
+	// 		sr_err("Failed to submit transfer: %s.",
+	// 		       libusb_error_name(ret));
+	// 		libusb_free_transfer(transfer);
+	// 		g_free(buf);
+	// 		sipeed_slogic_acquisition_stop(sdi);
+	// 		return SR_ERR;
+	// 	}
+	// 	devc->transfers[i] = transfer;
+	// 	devc->submitted_transfers++;
+	// }
+
+	// std_session_send_df_header(sdi);
+
+	// int ret = SR_OK;
+	// if ((ret = command_start_acquisition(sdi)) != SR_OK) {
+	// 	sipeed_slogic_acquisition_stop(sdi);
+	// 	return ret;
+	// }
+
+	std_session_send_df_frame_begin(sdi);
 	std_session_send_df_header(sdi);
 
-	int ret = SR_OK;
-	if ((ret = command_start_acquisition(sdi)) != SR_OK) {
-		sipeed_slogic_acquisition_stop(sdi);
-		return ret;
+
+	uint64_t samplerate = devc->cur_samplerate;
+	uint64_t samples = devc->limit_samples;
+
+	uint64_t length = samples;
+	uint16_t sample_width = 1 << devc->logic_pattern;
+	if(sample_width != 8) return SR_ERR_SAMPLERATE;
+	uint64_t unitsize = sample_width / 8;
+
+	sr_dbg("samplerate: %u, samples: %u, sample_width: %u\n", samplerate, samples, sample_width);
+
+	uint8_t * data = malloc(length * unitsize);
+	if (!data) return SR_ERR;
+
+	for (size_t i = 0; i < length; i++) {
+		data[i] = 0xff & i;
 	}
+
+	const struct sr_datafeed_logic logic = {
+		.length = length,
+		.unitsize = unitsize,
+		.data = data
+	};
+
+	const struct sr_datafeed_packet packet = {
+		.type = SR_DF_LOGIC,
+		.payload = &logic
+	};
+
+	sr_session_send(sdi, &packet);
+
+	free(data);
+
+	std_session_send_df_end(sdi);
 
 	// sr_dbg("Leave func %s", __func__);
 	return SR_OK;
@@ -139,11 +189,11 @@ SR_PRIV int sipeed_slogic_acquisition_stop(struct sr_dev_inst *sdi)
 	(void)sdi;DBG_VAL(sdi);
 	struct dev_context *devc = sdi->priv;
 
-	devc->acq_aborted = TRUE;
-	for (int i = devc->num_transfers - 1; i >= 0; i--) {
-		if (devc->transfers[i])
-			libusb_cancel_transfer(devc->transfers[i]);
-	}
+	// devc->acq_aborted = TRUE;
+	// for (int i = devc->num_transfers - 1; i >= 0; i--) {
+	// 	if (devc->transfers[i])
+	// 		libusb_cancel_transfer(devc->transfers[i]);
+	// }
 	// sr_dbg("Leave func %s", __func__);
 	return SR_OK;
 }
