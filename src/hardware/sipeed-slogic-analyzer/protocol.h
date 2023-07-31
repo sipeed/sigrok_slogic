@@ -72,14 +72,20 @@ struct dev_context {
 
 #pragma pack(push, 1)
 struct cmd_start_acquisition {
-	uint8_t sample_rate_l;
-	uint8_t sample_rate_h;
+  union {
+    struct {
+      uint8_t sample_rate_l;
+      uint8_t sample_rate_h;
+    };
+    uint16_t sample_rate;
+  };
 	uint8_t sample_channel;
 };
 #pragma pack(pop)
 
 /* Protocol commands */
 #define CMD_START			0xb1
+#define CMD_STOP 0xb3
 
 SR_PRIV int sipeed_slogic_analyzer_receive_data(int fd, int revents, void *cb_data);
 SR_PRIV int sipeed_slogic_acquisition_start(const struct sr_dev_inst *sdi);
