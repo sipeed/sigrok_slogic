@@ -20,159 +20,149 @@
 #include <config.h>
 #include "protocol.h"
 
-#define EP_IN 0x01
-#define EP_SIZE 512
-#define PACK_COUNT 210
-#define PACK_SIZE (EP_SIZE * PACK_COUNT)
-#define PACK_N 10
-#define MAX_TRANSFERS 32
-static struct {
-  size_t bytes_need_transfer;
-  size_t bytes_transferring;
-  size_t bytes_transfered;
+static int handle_events(int fd, int revents, void *cb_data);
 
-  struct libusb_transfer *transfers[MAX_TRANSFERS];
-  size_t transfers_used;
-} transfer_ctx;
+static void submit_data(void *data, size_t len, struct sr_dev_inst *sdi) {
+	const struct sr_datafeed_logic logic = {
+		.length = len,
+		.unitsize = 1,
+		.data = data,
+	};
 
-static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer);
-static int command_start_acquisition(const struct sr_dev_inst *sdi);
+	const struct sr_datafeed_packet packet = {
+		.type = SR_DF_LOGIC,
+		.payload = &logic
+	};
+
+	sr_session_send(sdi, &packet);
+}
 
 static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer) {
-  switch (transfer->status) {
-    case LIBUSB_TRANSFER_COMPLETED: {
-      sr_dbg("[%p]receive_transfer(): COMPLETED %u/%u", transfer,
-             transfer->actual_length, transfer->length);
 
-      transfer_ctx.bytes_transfered += transfer->actual_length;
-      transfer_ctx.bytes_transferring -= transfer->actual_length;
-
-      sr_dbg("\ttransfing: %u, transfered: %u, sum: %u/%u",
-             transfer_ctx.bytes_transferring, transfer_ctx.bytes_transfered,
-             (transfer_ctx.bytes_transfered + transfer_ctx.bytes_transferring),
-             transfer_ctx.bytes_need_transfer);
-
-	  {
-		const struct sr_datafeed_logic logic = {
-			.length = transfer->actual_length,
-			.unitsize = 1,
-			.data = transfer->buffer,
-		};
-
-		const struct sr_datafeed_packet packet = {
-			.type = SR_DF_LOGIC,
-			.payload = &logic
-		};
-
-		const struct sr_dev_inst *sdi = transfer->user_data;
-		sr_session_send(sdi, &packet);
-	  }
-
-      size_t bytes_to_transfer =
-          transfer_ctx.bytes_need_transfer -
-          (transfer_ctx.bytes_transfered + transfer_ctx.bytes_transferring);
-      if (bytes_to_transfer > PACK_SIZE) {
-        bytes_to_transfer = PACK_SIZE;
-      }
-      if (bytes_to_transfer) {
-        transfer->length = bytes_to_transfer;
-        transfer->actual_length = 0;
-        int r = libusb_submit_transfer(transfer);
-        if (r) {
-          sr_dbg("\tFailed to submit transfer: %s", libusb_error_name(r));
-          transfer_ctx.transfers_used -= 1;
-        }
-        sr_dbg("\tsubmit transfer: %p", transfer);
-
-        transfer_ctx.bytes_transferring += bytes_to_transfer;
-      } else {
-        transfer_ctx.transfers_used -= 1;
-      }
-
-    } break;
-
-    case LIBUSB_TRANSFER_TIMED_OUT: { /* may have received some data */
-      sr_dbg("receive_transfer(): TIMED_OUT but receive %u bytes",
-             transfer->actual_length);
-
-      if (transfer->actual_length == 0) {
-        transfer_ctx.transfers_used -= 1;
-        break;
-      }
-
-      transfer_ctx.bytes_transfered += transfer->actual_length;
-      transfer_ctx.bytes_transferring -= transfer->actual_length;
-
-      size_t bytes_to_transfer =
-          transfer_ctx.bytes_need_transfer -
-          (transfer_ctx.bytes_transfered + transfer_ctx.bytes_transferring);
-      if (bytes_to_transfer > PACK_SIZE) {
-        bytes_to_transfer = PACK_SIZE;
-      }
-      transfer->length = bytes_to_transfer;
-      transfer->actual_length = 0;
-      int r = libusb_submit_transfer(transfer);
-      if (r) {
-        sr_dbg("\tFailed to submit transfer: %s", libusb_error_name(r));
-        transfer_ctx.transfers_used -= 1;
-      }
-
-      transfer_ctx.bytes_transferring += bytes_to_transfer;
-    } break;
-
-    case LIBUSB_TRANSFER_NO_DEVICE: {
-      sr_dbg("receive_transfer(): NO_DEVICE");
-      transfer_ctx.transfers_used = 0;
-    } break;
-
-    default: {
-      sr_dbg("receive_transfer(): OTHER_ERROR[%u]", transfer->status);
-      transfer_ctx.transfers_used -= 1;
-    } break;
-  }
-
-  if (transfer_ctx.transfers_used == 0) {
-    sr_dbg("receive_transfer(): free all transfers");
-    for (size_t i = 0; i < MAX_TRANSFERS; ++i) {
-      struct libusb_transfer *transfer = transfer_ctx.transfers[i];
-      if (transfer) {
-        free(transfer->buffer);
-        libusb_free_transfer(transfer);
-      }
-      transfer_ctx.transfers[i] = NULL;
-    }
-  }
-};
-
-SR_PRIV int sipeed_slogic_analyzer_receive_data(int fd, int revents, void *cb_data)
-{
-	// sr_dbg("Enter func %s", __func__);
+	int ret;
 	const struct sr_dev_inst *sdi;
 	struct dev_context *devc;
+	struct sr_usb_dev_inst *usb;
+
+	sdi  = transfer->user_data;
+	devc = sdi->priv;
+	usb  = sdi->conn;
+
+	switch (transfer->status) {
+		case LIBUSB_TRANSFER_COMPLETED: 
+		case LIBUSB_TRANSFER_TIMED_OUT: { /* may have received some data */
+			if (transfer->actual_length == 0) {
+				devc->transfers_used -= 1;
+				break;
+			}
+
+			devc->bytes_transfered += transfer->actual_length;
+			devc->bytes_transferring -= transfer->actual_length;
+
+			sr_dbg("\ttransfing: %u, transfered: %u, sum: %u/%u",
+					devc->bytes_transferring, devc->bytes_transfered,
+					(devc->bytes_transfered + devc->bytes_transferring),
+					devc->bytes_need_transfer);
+
+			{
+				uint8_t *ptr = transfer->buffer;
+				size_t len = transfer->actual_length;
+				if (devc->cur_samplechannel != 8) {
+					size_t step = 8 / devc->cur_samplechannel;
+					uint8_t mask = 0xff >> (8 - devc->cur_samplechannel);
+					len *= step;
+					ptr = g_malloc(len);
+					for(size_t i=0; i<transfer->actual_length; i++) {
+						for(size_t j=0; j<step; j++) {
+							ptr[i*step+j] = mask & (transfer->buffer[i] >> (j * devc->cur_samplechannel));
+						}
+					}
+				}
+				submit_data(ptr, len, sdi);
+				if (devc->cur_samplechannel != 8) {
+					g_free(ptr);
+				}
+			}
+
+			size_t bytes_to_transfer = devc->bytes_need_transfer -
+				(devc->bytes_transfered + devc->bytes_transferring);
+			if (bytes_to_transfer > devc->transfers_buffer_size) {
+				bytes_to_transfer = devc->transfers_buffer_size;
+			}
+			if (bytes_to_transfer) {
+				transfer->length = bytes_to_transfer;
+				transfer->actual_length = 0;
+				ret = libusb_submit_transfer(transfer);
+				if (ret) {
+					sr_warn("Failed to submit transfer: %s", libusb_error_name(ret));
+					devc->transfers_used -= 1;
+				}
+				sr_dbg("submit transfer: %p", transfer);
+
+				devc->bytes_transferring += bytes_to_transfer;
+			} else {
+				devc->transfers_used -= 1;
+			}
+		} break;
+
+		case LIBUSB_TRANSFER_NO_DEVICE: {
+			devc->transfers_used = 0;
+		} break;
+
+		default: {
+			devc->transfers_used -= 1;
+		} break;
+	}
+
+	if (devc->transfers_used == 0) {
+		sr_dbg("receive_transfer(): free all transfers");
+
+		sr_dbg("Bulk in %u/%u bytes", devc->bytes_transfered,
+				devc->bytes_need_transfer);
+
+		sr_dev_acquisition_stop(sdi);
+		handle_events(0, 0, sdi);
+	}
+};
+
+static int handle_events(int fd, int revents, void *cb_data)
+{
+	struct sr_dev_inst *sdi;
+	struct sr_dev_driver *di;
+	struct dev_context *devc;
 	struct drv_context *drvc;
+	struct timeval tv;
 
 	(void)fd;
 	(void)revents;
 
 	sdi = cb_data;
-	if (!sdi)
-		return TRUE;
-
 	devc = sdi->priv;
-	if (!devc)
-		return TRUE;
+	di = sdi->driver;
+	drvc = di->context;
 
-	drvc = sdi->driver->context;
-	if (!drvc)
-		return TRUE;
+	sr_dbg("handle_events enter");
 
-	struct timeval tv = {
-		.tv_sec = 0,
-		.tv_usec = 0,
-	};
-	libusb_handle_events_timeout(drvc->sr_ctx->libusb_ctx, &tv);
+	memset(&tv, 0, sizeof(struct timeval));
+	libusb_handle_events_timeout_completed(drvc->sr_ctx->libusb_ctx, &tv,
+			NULL);
 
-	// sr_dbg("Leave func %s", __func__);
+	if (devc->acq_aborted == TRUE) {
+		for (size_t i = 0; i < NUM_MAX_TRANSFERS; ++i) {
+			struct libusb_transfer *transfer = devc->transfers[i];
+			if (transfer) {
+				libusb_cancel_transfer(transfer);
+				g_free(transfer->buffer);
+				libusb_free_transfer(transfer);
+			}
+			devc->transfers[i] = NULL;
+		}
+
+		usb_source_remove(sdi->session, drvc->sr_ctx);
+		std_session_send_df_end(sdi);
+	}
+	
+
 	return TRUE;
 }
 
@@ -182,521 +172,120 @@ SR_PRIV int sipeed_slogic_acquisition_start(const struct sr_dev_inst *sdi)
 	/* TODO: configure hardware, reset acquisition state, set up
 	 * callbacks and send header packet. */
 
-	(void)sdi;DBG_VAL(sdi);
-	struct dev_context *devc = sdi->priv;
+	struct sr_dev_driver *di;
+	struct dev_context *devc;
+	struct drv_context *drvc;
+	struct sr_usb_dev_inst *usb;
 
-	// int timeout = get_timeout(devc);
-	// usb_source_add(sdi->session, sdi->session->ctx, timeout, sipeed_slogic_analyzer_receive_data, sdi);
+	struct cmd_start_acquisition cmd;
+	int ret;
+	size_t size_transfer_buf;
 
-	struct sr_usb_dev_inst *usb = sdi->conn;
-	// devc->sent_samples = 0;
-	// devc->acq_aborted = FALSE;
-	// devc->empty_transfer_count = 0;
+	devc = sdi->priv;
+	di = sdi->driver;
+	drvc = di->context;
+	usb  = sdi->conn;
 
-	// struct sr_trigger *trigger;
-	// if ((trigger = sr_session_trigger_get(sdi->session))) {
-	// 	int pre_trigger_samples = 0;
-	// 	if (devc->limit_samples > 0)
-	// 		pre_trigger_samples = (devc->capture_ratio * devc->limit_samples) / 100;
-	// 	devc->stl = soft_trigger_logic_new(sdi, trigger, pre_trigger_samples);
-	// 	if (!devc->stl)
-	// 		return SR_ERR_MALLOC;
-	// 	devc->trigger_fired = FALSE;
-	// } else {
-	// 	std_session_send_df_frame_begin(sdi);
-	// 	devc->trigger_fired = TRUE;
-	// }
+	// TODO
+	// if(devc->cur_samplechannel != 8) return SR_ERR_SAMPLERATE;
 
-	// devc->submitted_transfers = 0;
-	// size_t num_transfers = get_number_of_transfers(devc);
-	// devc->num_transfers = num_transfers;
-	// devc->transfers = g_try_malloc0(sizeof(*devc->transfers) * devc->num_transfers);
-	// if (!devc->transfers) {
-	// 	sr_err("USB transfers malloc failed.");
-	// 	return SR_ERR_MALLOC;
-	// }
+	sr_dbg("samplerate: %uHz@%uch, samples: %u",
+			devc->cur_samplerate / SR_MHZ(1), 
+			devc->cur_samplechannel, 
+			devc->limit_samples);
 
-	// sr_dbg("Clear EP");
-	// {
-	//  	uint8_t tmp[512];
-	// 	int actual_length = 0;
-	// 	do {
-	// 		libusb_bulk_transfer(usb->devhdl, 1| LIBUSB_ENDPOINT_IN, tmp, sizeof(tmp),
-	// 							&actual_length, 1000);
-	// 	} while (actual_length);
-	// }
-	// sr_dbg("Cleared EP");
+	devc->acq_aborted = FALSE;
+  	devc->bytes_need_transfer = 0;
+	devc->bytes_transferring = 0;
+	devc->bytes_transfered = 0;
+	devc->transfers_used = 0;
+	memset(devc->transfers, 0, sizeof(devc->transfers));
 
-	// size_t size = get_buffer_size(devc);
-	// for (int i = 0; i < devc->num_transfers; i++) {
-	// 	uint8_t *buf = g_try_malloc(size * (8+1)); /* max 8xu1 */
-	// 	if (!buf) {
-	// 		sr_err("USB transfer buffer malloc failed.");
-	// 		return SR_ERR_MALLOC;
-	// 	}
-	// 	struct libusb_transfer *transfer = libusb_alloc_transfer(0);
-	// 	libusb_fill_bulk_transfer(transfer, usb->devhdl,
-	// 			1 | LIBUSB_ENDPOINT_IN, buf, size,
-	// 			receive_transfer, (void *)sdi, timeout);
-	// 	sr_info("submitting transfer: %d", i);
-	// 	int ret = 0;
-	// 	if ((ret = libusb_submit_transfer(transfer)) != 0) {
-	// 		sr_err("Failed to submit transfer: %s.",
-	// 		       libusb_error_name(ret));
-	// 		libusb_free_transfer(transfer);
-	// 		g_free(buf);
-	// 		sipeed_slogic_acquisition_stop(sdi);
-	// 		return SR_ERR;
-	// 	}
-	// 	devc->transfers[i] = transfer;
-	// 	devc->submitted_transfers++;
-	// }
+	devc->timeout = get_timeout(devc);
+	sr_dbg("timeout: %ums", devc->timeout);
+	usb_source_add(sdi->session, drvc->sr_ctx, devc->timeout,
+			handle_events, (void *)sdi);
 
-	// std_session_send_df_header(sdi);
+	devc->transfers_buffer_size = get_buffer_size(devc);
+	sr_dbg("transfers_buffer_size: %u", devc->transfers_buffer_size);
 
-	// int ret = SR_OK;
-	// if ((ret = command_start_acquisition(sdi)) != SR_OK) {
-	// 	sipeed_slogic_acquisition_stop(sdi);
-	// 	return ret;
-	// }
+	/* compute needed bytes */
+	uint64_t samples_in_bytes = devc->limit_samples * devc->cur_samplechannel / 8;
+	devc->bytes_need_transfer = samples_in_bytes / devc->transfers_buffer_size;
+	if (samples_in_bytes % devc->transfers_buffer_size) devc->bytes_need_transfer += 1;
+	devc->bytes_need_transfer *= devc->transfers_buffer_size;
+
+
+
+	cmd.sample_rate = devc->cur_samplerate / SR_MHZ(1);
+	cmd.sample_channel = devc->cur_samplechannel;
+
+	clear_ep(EP_IN, usb->devhdl);
+
+	while (devc->transfers_used < NUM_MAX_TRANSFERS && devc->bytes_transfered
+			+ devc->bytes_transferring < devc->bytes_need_transfer)
+	{
+		uint8_t *dev_buf = g_malloc(devc->transfers_buffer_size);
+		if (!dev_buf) {
+			sr_dbg("Failed to allocate memory");
+			break;
+		}
+
+		struct libusb_transfer *transfer = libusb_alloc_transfer(0);
+		if (!transfer) {
+			g_free(dev_buf);
+			sr_dbg("Failed to allocate transfer");
+			break;
+		}
+
+		size_t bytes_to_transfer = devc->bytes_need_transfer -
+			(devc->bytes_transfered + devc->bytes_transferring);
+		if (bytes_to_transfer > devc->transfers_buffer_size) {
+			bytes_to_transfer = devc->transfers_buffer_size;
+		}
+
+		libusb_fill_bulk_transfer(transfer, usb->devhdl, EP_IN | LIBUSB_ENDPOINT_IN,
+									dev_buf, bytes_to_transfer, receive_transfer,
+									sdi, devc->timeout);
+		transfer->actual_length = 0;
+
+		ret = libusb_submit_transfer(transfer);
+		if (ret) {
+			sr_dbg("Failed to submit transfer: %s.", libusb_error_name(ret));
+			g_free(transfer->buffer);
+			libusb_free_transfer(transfer);
+			break;
+		}
+		devc->transfers[devc->transfers_used] = transfer;
+
+		devc->bytes_transferring += bytes_to_transfer;
+		devc->transfers_used += 1;
+	}
+	sr_dbg("Submited transfers");
 
 	std_session_send_df_frame_begin(sdi);
 	std_session_send_df_header(sdi);
 
-
-	uint64_t samplerate = devc->cur_samplerate;
-	uint64_t samples = devc->limit_samples;
-
-	uint64_t length = samples;
-	uint16_t sample_width = 1 << devc->logic_pattern;
-	if(sample_width != 8) return SR_ERR_SAMPLERATE;
-	uint64_t unitsize = sample_width / 8;
-
-	sr_dbg("samplerate: %u, samples: %u, sample_width: %u", samplerate, samples, sample_width);
-
-
-	sr_dbg("Clear EP");
-	{
-		static uint8_t tmp[512];
-		int actual_length = 0;
-		do {
-		libusb_bulk_transfer(usb->devhdl, EP_IN | LIBUSB_ENDPOINT_IN, tmp, sizeof(tmp),
-							&actual_length, 100);
-		} while (actual_length);
-	}
-	sr_dbg("Cleared EP");
-	
-	struct cmd_start_acquisition cmd;
-	cmd.sample_rate = samplerate / SR_MHZ(1);
-	cmd.sample_channel = sample_width;
-
-	int r;
-	{	
-		memset(&transfer_ctx, 0, sizeof(transfer_ctx));
-		transfer_ctx.bytes_need_transfer = samples / PACK_SIZE;
-		if (samples % PACK_SIZE) transfer_ctx.bytes_need_transfer += 1;
-		transfer_ctx.bytes_need_transfer *= PACK_SIZE;
-		transfer_ctx.bytes_transferring = 0;
-		transfer_ctx.bytes_transfered = 0;
-		transfer_ctx.transfers_used = 0;
-
-		// int timeout = PACK_SIZE * 8 / cmd.sample_channel / cmd.sample_rate / 1000
-		// *
-		//               (1 + 4) / 4;
-		int timeout = transfer_ctx.bytes_need_transfer * 8 / cmd.sample_channel /
-					cmd.sample_rate / 1000 * (1 + 4) / 4;
-		while ((transfer_ctx.transfers_used < MAX_TRANSFERS) &&
-			(transfer_ctx.bytes_transfered + transfer_ctx.bytes_transferring <
-				transfer_ctx.bytes_need_transfer)) {
-		uint8_t *dev_buf = malloc(PACK_SIZE);
-		if (!dev_buf) {
-			sr_dbg("Failed to allocate dev_mem");
-			break;
-		}
-		struct libusb_transfer *transfer = libusb_alloc_transfer(0);
-		if (!transfer) {
-			sr_dbg("Failed to allocate transfer");
-			free(dev_buf);
-			break;
-		}
-
-		size_t bytes_to_transfer =
-			transfer_ctx.bytes_need_transfer -
-			(transfer_ctx.bytes_transfered + transfer_ctx.bytes_transferring);
-		if (bytes_to_transfer > PACK_SIZE) {
-			bytes_to_transfer = PACK_SIZE;
-		}
-		libusb_fill_bulk_transfer(transfer, usb->devhdl, EP_IN | LIBUSB_ENDPOINT_IN,
-									dev_buf, bytes_to_transfer, receive_transfer,
-									sdi, timeout);
-		transfer->actual_length = 0;
-
-		r = libusb_submit_transfer(transfer);
-		if (r) {
-			sr_dbg("Failed to submit transfer: %s.", libusb_error_name(r));
-			free(transfer->buffer);
-			libusb_free_transfer(transfer);
-			break;
-		}
-		transfer_ctx.transfers[transfer_ctx.transfers_used] = transfer;
-
-		transfer_ctx.bytes_transferring += bytes_to_transfer;
-		transfer_ctx.transfers_used += 1;
-		}
-	}
-	sr_dbg("Submited transfers");
-
-	r = libusb_control_transfer(
+	ret = libusb_control_transfer(
 		usb->devhdl, LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_ENDPOINT_OUT, CMD_START, 0x0000,
 		0x0000, (unsigned char *)&cmd, 3 /*sizeof(cmd)*/, 100);
-	if (r < 0) {
-		sr_dbg("Unable to send start command: %s", libusb_error_name(r));
+	if (ret < 0) {
+		sr_dbg("Unable to send start command: %s", libusb_error_name(ret));
+		return SR_ERR_NA;
 	}
-
 	sr_dbg("CMD_STARTED");
 
-	uint64_t all_time = transfer_ctx.bytes_need_transfer * 8 /
-						cmd.sample_channel / cmd.sample_rate * 5 / 4;
-
-	sr_dbg("sleep %u.%u s", all_time / 1000000, all_time % 1000000);
-	usleep(all_time);
-
-	if (!transfer_ctx.transfers_used) {
-		sr_dbg("Failed to submited transfers");
-	} else {
-		sr_dbg("wait libusb_handle_events_completed");
-		struct drv_context *drvc = sdi->driver->context;
-		libusb_handle_events_completed(drvc->sr_ctx->libusb_ctx, NULL);
-		sr_dbg("libusb_handle_events_completed");
-	}
-
-	 r = libusb_control_transfer(usb->devhdl,
-								LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_ENDPOINT_OUT,
-								CMD_STOP, 0x0000, 0x0000, NULL, 0, 100);
-	if (r < 0) {
-		sr_dbg("Unable to send start command: %s", libusb_error_name(r));
-	}
-
-	sr_dbg("CMD_STOPED");
-
-	sr_dbg("Clear EP");
-	{
-		static uint8_t tmp[512];
-		int actual_length = 0;
-		do {
-		libusb_bulk_transfer(usb->devhdl, EP_IN | LIBUSB_ENDPOINT_IN, tmp, sizeof(tmp),
-							&actual_length, 100);
-		} while (actual_length);
-	}
-	sr_dbg("Cleared EP");
-
-	sr_dbg("Bulk in %u/%u bytes", transfer_ctx.bytes_transfered,
-			transfer_ctx.bytes_need_transfer);
-
-
-	// uint8_t * data = malloc(length * unitsize);
-	// if (!data) return SR_ERR;
-
-	// for (size_t i = 0; i < length; i++) {
-	// 	data[i] = 0xff & i;
-	// }
-
-	// const struct sr_datafeed_logic logic = {
-	// 	.length = length,
-	// 	.unitsize = unitsize,
-	// 	.data = data
-	// };
-
-	// const struct sr_datafeed_packet packet = {
-	// 	.type = SR_DF_LOGIC,
-	// 	.payload = &logic
-	// };
-
-	// sr_session_send(sdi, &packet);
-
-	// free(data);
-
-	std_session_send_df_end(sdi);
-
-	// sr_dbg("Leave func %s", __func__);
 	return SR_OK;
 }
 
 SR_PRIV int sipeed_slogic_acquisition_stop(struct sr_dev_inst *sdi)
 {
-	// sr_dbg("Enter func %s", __func__);
-	/* TODO: stop acquisition. */
 
-	(void)sdi;DBG_VAL(sdi);
-	struct dev_context *devc = sdi->priv;
+	struct dev_context *devc;
 
-	// devc->acq_aborted = TRUE;
-	// for (int i = devc->num_transfers - 1; i >= 0; i--) {
-	// 	if (devc->transfers[i])
-	// 		libusb_cancel_transfer(devc->transfers[i]);
-	// }
-	// sr_dbg("Leave func %s", __func__);
+	devc = sdi->priv;
+
+	devc->acq_aborted = TRUE;
+
 	return SR_OK;
 }
-
-// static void finish_acquisition(struct sr_dev_inst *sdi)
-// {
-// 	// sr_dbg("Enter func %s", __func__);
-// 	struct dev_context *devc;
-
-// 	devc = sdi->priv;
-
-// 	std_session_send_df_end(sdi);
-
-// 	usb_source_remove(sdi->session, sdi->session->ctx);
-
-// 	devc->num_transfers = 0;
-// 	g_free(devc->transfers);
-
-// 	if (devc->stl) {
-// 		soft_trigger_logic_free(devc->stl);
-// 		devc->stl = NULL;
-// 	}
-// 	// sr_dbg("Leave func %s", __func__);
-// }
-
-// static void free_transfer(struct libusb_transfer *transfer)
-// {
-// 	// sr_dbg("Enter func %s", __func__);
-// 	struct sr_dev_inst *sdi;
-// 	struct dev_context *devc;
-// 	unsigned int i;
-
-// 	sdi = transfer->user_data;
-// 	devc = sdi->priv;
-
-// 	g_free(transfer->buffer);
-// 	transfer->buffer = NULL;
-// 	libusb_free_transfer(transfer);
-
-// 	for (i = 0; i < devc->num_transfers; i++) {
-// 		if (devc->transfers[i] == transfer) {
-// 			devc->transfers[i] = NULL;
-// 			break;
-// 		}
-// 	}
-
-// 	devc->submitted_transfers--;
-// 	if (devc->submitted_transfers == 0)
-// 		finish_acquisition(sdi);
-// 	// sr_dbg("Leave func %s", __func__);
-// }
-
-// static void resubmit_transfer(struct libusb_transfer *transfer)
-// {
-// 	// sr_dbg("Enter func %s", __func__);
-// 	int ret;
-
-// 	if ((ret = libusb_submit_transfer(transfer)) == LIBUSB_SUCCESS)
-// 		return;
-
-// 	sr_err("%s: %s", __func__, libusb_error_name(ret));
-// 	free_transfer(transfer);
-// 	// sr_dbg("Leave func %s", __func__);
-// }
-
-// static void la_send_data_proc(struct sr_dev_inst *sdi,
-// 	uint8_t *data, size_t length, size_t sample_width)
-// {
-// 	// sr_dbg("Enter func %s", __func__);
-// 	const struct sr_datafeed_logic logic = {
-// 		.length = length,
-// 		.unitsize = sample_width,
-// 		.data = data
-// 	};
-
-// 	const struct sr_datafeed_packet packet = {
-// 		.type = SR_DF_LOGIC,
-// 		.payload = &logic
-// 	};
-
-// 	sr_session_send(sdi, &packet);
-// 	// sr_dbg("Leave func %s", __func__);
-// }
-
-// static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer)
-// {
-// 	// sr_dbg("Enter func %s", __func__);
-// 	struct sr_dev_inst *sdi = transfer->user_data;
-// 	struct dev_context *devc = sdi->priv;
-// 	gboolean packet_has_error = FALSE;
-// 	unsigned int num_samples;
-// 	int trigger_offset, cur_sample_count, unitsize, processed_samples;
-// 	int pre_trigger_samples;
-
-// 	/*
-// 	 * If acquisition has already ended, just free any queued up
-// 	 * transfer that come in.
-// 	 */
-// 	if (devc->acq_aborted) {
-// 		free_transfer(transfer);
-// 		return;
-// 	}
-
-// 	// sr_dbg("receive_transfer(): status %s received %d bytes.", libusb_error_name(transfer->status), transfer->actual_length);
-
-// 	/* Save incoming transfer before reusing the transfer struct. */
-// 	unitsize = 1+(((1<<devc->logic_pattern)-1)>>3);
-// 	cur_sample_count = transfer->actual_length * 8 / (1<<devc->logic_pattern);
-// 	processed_samples = 0;
-
-// 	switch (transfer->status) {
-// 	case LIBUSB_TRANSFER_NO_DEVICE:
-// 		sipeed_slogic_acquisition_stop(sdi);
-// 		free_transfer(transfer);
-// 		return;
-// 	case LIBUSB_TRANSFER_COMPLETED:
-// 	case LIBUSB_TRANSFER_TIMED_OUT: /* We may have received some data though. */
-// 		break;
-// 	default:
-// 		packet_has_error = TRUE;
-// 		break;
-// 	}
-
-// 	if (transfer->actual_length == 0 || packet_has_error) {
-// 		devc->empty_transfer_count++;
-// 		if (devc->empty_transfer_count > MAX_EMPTY_TRANSFERS) {
-// 			/*
-// 			 * The FX2 gave up. End the acquisition, the frontend
-// 			 * will work out that the samplecount is short.
-// 			 */
-// 			sipeed_slogic_acquisition_stop(sdi);
-// 			free_transfer(transfer);
-// 		} else {
-// 			resubmit_transfer(transfer);
-// 		}
-// 		return;
-// 	} else {
-// 		devc->empty_transfer_count = 0;
-// 	}
-
-// 	uint8_t real_bits = 1<<devc->logic_pattern;
-// check_trigger:
-// 	if (real_bits < 8) {
-// 		for (int i = cur_sample_count-1; i>=0; i--) {
-			
-// 			((uint8_t *)transfer->buffer+get_buffer_size(devc))[i] = 
-// 				(((uint8_t *)transfer->buffer)[i/(8/real_bits)] >> (real_bits*(i%(8/real_bits))))
-// 				&((1<<real_bits)-1);
-// 		}
-// 	}
-// 	if (devc->trigger_fired) {
-// 		if (!devc->limit_samples || devc->sent_samples < devc->limit_samples) {
-// 			/* Send the incoming transfer to the session bus. */
-// 			num_samples = cur_sample_count - processed_samples;
-// 			if (devc->limit_samples && devc->sent_samples + num_samples > devc->limit_samples)
-// 				num_samples = devc->limit_samples - devc->sent_samples;
-
-// 			la_send_data_proc(sdi, (uint8_t *)transfer->buffer + (real_bits<8?get_buffer_size(devc):0)
-// 				+ processed_samples * unitsize,
-// 				num_samples * unitsize, unitsize);
-// 			devc->sent_samples += num_samples;
-// 			processed_samples += num_samples;
-// 		}
-// 	} else {
-// 		trigger_offset = soft_trigger_logic_check(devc->stl,
-// 			transfer->buffer + processed_samples * unitsize,
-// 			transfer->actual_length - processed_samples * unitsize,
-// 			&pre_trigger_samples);
-// 		if (trigger_offset > -1) {
-// 			std_session_send_df_frame_begin(sdi);
-// 			devc->sent_samples += pre_trigger_samples;
-// 			num_samples = cur_sample_count - processed_samples - trigger_offset;
-// 			if (devc->limit_samples &&
-// 					devc->sent_samples + num_samples > devc->limit_samples)
-// 				num_samples = devc->limit_samples - devc->sent_samples;
-
-// 			la_send_data_proc(sdi, (uint8_t *)transfer->buffer + (real_bits<8?get_buffer_size(devc):0)
-// 				+ processed_samples * unitsize
-// 				+ trigger_offset * unitsize,
-// 				num_samples * unitsize, unitsize);
-// 			devc->sent_samples += num_samples;
-// 			processed_samples += trigger_offset + num_samples;
-
-// 			devc->trigger_fired = TRUE;
-// 		}
-// 	}
-
-// 	const int frame_ended = devc->limit_samples && (devc->sent_samples >= devc->limit_samples);
-// 	const int final_frame = devc->limit_frames && (devc->num_frames >= (devc->limit_frames - 1));
-
-// 	if (frame_ended) {
-// 		devc->num_frames++;
-// 		devc->sent_samples = 0;
-// 		devc->trigger_fired = FALSE;
-// 		std_session_send_df_frame_end(sdi);
-
-// 		/* There may be another trigger in the remaining data, go back and check for it */
-// 		if (processed_samples < cur_sample_count) {
-// 			/* Reset the trigger stage */
-// 			if (devc->stl)
-// 				devc->stl->cur_stage = 0;
-// 			else {
-// 				std_session_send_df_frame_begin(sdi);
-// 				devc->trigger_fired = TRUE;
-// 			}
-// 			if (!final_frame)
-// 				goto check_trigger;
-// 		}
-// 	}
-// 	if (frame_ended && final_frame) {
-// 		sipeed_slogic_acquisition_stop(sdi);
-// 		free_transfer(transfer);
-// 	} else
-// 		resubmit_transfer(transfer);
-// 	// sr_dbg("Leave func %s", __func__);
-// }
-
-// #define USB_TIMEOUT 100
-
-// static int command_start_acquisition(const struct sr_dev_inst *sdi)
-// {
-// 	// sr_dbg("Enter func %s", __func__);
-// 	struct dev_context *devc;
-// 	struct sr_usb_dev_inst *usb;
-// 	uint64_t samplerate, samplechannel;
-// 	struct cmd_start_acquisition cmd;
-// 	int ret;
-
-// 	devc = sdi->priv;
-// 	usb = sdi->conn;
-// 	samplerate = devc->cur_samplerate;
-// 	samplechannel = 1<<devc->logic_pattern;
-
-// 	/* Compute the sample rate. */
-// 	if (0) {
-// 		sr_err("Unable to sample at %" PRIu64 "Hz "
-// 		       "when collecting 16-bit samples.", samplerate);
-// 		return SR_ERR;
-// 	}
-
-// 	if (samplerate > SR_MHZ(160) || samplechannel * samplerate > SR_MHZ(40 * 8)) {
-// 		sr_err("Unable to sample at %" PRIu64 "Hz.", samplerate);
-// 		// return SR_ERR;
-// 	}
-
-// 	sr_dbg("SLogic samplerate(%dch) = %d, clocksource = %sMHz.", samplechannel, samplerate, "160");
-
-// 	samplerate /= SR_MHZ(1);
-// 	cmd.sample_rate_h = (samplerate >> 8) & 0xff;
-// 	cmd.sample_rate_l = samplerate & 0xff;
-// 	cmd.sample_channel = samplechannel;
-
-// 	/* Send the control message. */
-// 	ret = libusb_control_transfer(usb->devhdl, LIBUSB_REQUEST_TYPE_VENDOR |
-// 			LIBUSB_ENDPOINT_OUT, CMD_START, 0x0000, 0x0000,
-// 			(unsigned char *)&cmd, sizeof(cmd), USB_TIMEOUT);
-// 	if (ret < 0) {
-// 		sr_err("Unable to send start command: %s.",
-// 		       libusb_error_name(ret));
-// 		return SR_ERR;
-// 	}
-
-// 	// sr_dbg("Leave func %s", __func__);
-// 	return SR_OK;
-// }

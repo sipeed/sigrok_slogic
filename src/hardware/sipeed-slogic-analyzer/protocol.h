@@ -28,30 +28,54 @@
 
 #define LOG_PREFIX "sipeed-slogic-analyzer"
 
-#define NUM_SIMUL_TRANSFERS 32
-#define MAX_EMPTY_TRANSFERS (NUM_SIMUL_TRANSFERS * 2)
+#define EP_IN 0x01
+#define SIZE_MAX_EP_HS 512
+#define NUM_MAX_TRANSFERS 64
 
-#define DBG_VAL(expr) do {\
-	__typeof((expr)) _expr = (expr);\
-	sr_warn("[%u]%s<"#expr"> i:%d\tu:%u\tf:%f\th:%x", __LINE__, __func__, \
-		*(long*)(&_expr), \
-		*(unsigned long*)(&_expr), \
-		*(float*)(&_expr), \
-		*(unsigned long*)(&_expr)); \
-}while(0)
-
-struct slogic_profile {
-	uint16_t vid;
-	uint16_t pid;
+static const uint64_t samplerates[] = {
+	/* 160M = 2*2*2*2*2*5M */
+	SR_MHZ(1),
+	SR_MHZ(2),
+	SR_MHZ(4),
+	SR_MHZ(5),
+	SR_MHZ(8),
+	SR_MHZ(10),
+	SR_MHZ(16),
+	SR_MHZ(20),
+	SR_MHZ(32),
+	SR_MHZ(36),
+	SR_MHZ(40),
+	/* x 4ch */
+	SR_MHZ(64),
+	SR_MHZ(80),
+	/* x 2ch */
+	SR_MHZ(120),
+	SR_MHZ(128),
+	SR_MHZ(144),
+	SR_MHZ(160),
 };
 
 struct dev_context {
-    struct slogic_profile *profile;
+	struct {
+		uint64_t limit_samples;
+		uint64_t cur_samplerate;
+		uint64_t cur_samplechannel;
+	};
 
-	uint64_t limit_samples;
-	uint64_t limit_frames;
+	uint64_t num_transfers;
+	struct libusb_transfer *transfers[NUM_MAX_TRANSFERS];
 
 	gboolean acq_aborted;
+
+	uint64_t timeout;
+
+	size_t transfers_buffer_size;
+
+	size_t bytes_need_transfer;
+	size_t bytes_transferring;
+	size_t bytes_transfered;
+	size_t transfers_used;
+
 	gboolean trigger_fired;
 	struct soft_trigger_logic *stl;
 
@@ -60,15 +84,23 @@ struct dev_context {
 	int submitted_transfers;
 	int empty_transfer_count;
 
-	uint64_t num_transfers;
-	struct libusb_transfer **transfers;
 
-	uint64_t cur_samplerate;
-	int logic_pattern;
 	double voltage_threshold[2];
 	/* Triggers */
 	uint64_t capture_ratio;
 };
+
+static inline void devc_set_samplerate(struct dev_context *devc, uint64_t new_samplerate) {
+	devc->cur_samplerate = new_samplerate;
+	if (new_samplerate >= SR_MHZ(120)) {
+		devc->cur_samplechannel = 2;
+	} else if (new_samplerate >= SR_MHZ(40)) {
+		devc->cur_samplechannel = 4;
+	} else {
+		devc->cur_samplechannel = 8;
+	}
+	sr_info("rebind sample channel to %uCH", devc->cur_samplechannel);
+}
 
 #pragma pack(push, 1)
 struct cmd_start_acquisition {
@@ -84,36 +116,39 @@ struct cmd_start_acquisition {
 #pragma pack(pop)
 
 /* Protocol commands */
-#define CMD_START			0xb1
-#define CMD_STOP 0xb3
+#define CMD_START	0xb1
+#define CMD_STOP	0xb3
 
-SR_PRIV int sipeed_slogic_analyzer_receive_data(int fd, int revents, void *cb_data);
 SR_PRIV int sipeed_slogic_acquisition_start(const struct sr_dev_inst *sdi);
 SR_PRIV int sipeed_slogic_acquisition_stop(struct sr_dev_inst *sdi);
 
 static inline size_t to_bytes_per_ms(struct dev_context *devc)
 {
-	size_t channel_counts = 1 << (devc->logic_pattern);
-	return (devc->cur_samplerate * channel_counts)/8/1000;
+	return (devc->cur_samplerate * devc->cur_samplechannel) / 8 / 1000;
 }
 
 static inline size_t get_buffer_size(struct dev_context *devc)
 {
 	/**
 	 * The buffer should be large enough to hold 10ms of data and
-	 * a multiple of 512.
+	 * a multiple of 210 * 512.
 	 */
+	const size_t pack_size = SIZE_MAX_EP_HS;
 	size_t s = 10 * to_bytes_per_ms(devc);
-	size_t pack_size = 512;
-	return (s + (pack_size-1)) & ~(pack_size-1);
+	size_t rem = s % (210 * pack_size);
+	if (rem) s += 210 * pack_size - rem;
+	return s;
 }
 
 static inline size_t get_number_of_transfers(struct dev_context *devc)
 {
 	/* Total buffer size should be able to hold about 500ms of data. */
-	size_t n = (500 * to_bytes_per_ms(devc) / get_buffer_size(devc));
-	if (n > NUM_SIMUL_TRANSFERS)
-		return NUM_SIMUL_TRANSFERS;
+	size_t s = 500 * to_bytes_per_ms(devc);
+	size_t n = s / get_buffer_size(devc);
+	size_t rem = s % get_buffer_size(devc);
+	if (rem) n += 1;
+	if (n > NUM_MAX_TRANSFERS)
+		return NUM_MAX_TRANSFERS;
 	return n;
 }
 
@@ -123,6 +158,17 @@ static inline size_t get_timeout(struct dev_context *devc)
 			get_number_of_transfers(devc);
 	size_t timeout = total_size / to_bytes_per_ms(devc);
 	return timeout + timeout / 4; /* Leave a headroom of 25% percent. */
+}
+
+static inline void clear_ep(uint8_t ep, libusb_device_handle *usbh) {
+	sr_dbg("Clearring EP: %u", ep);
+	uint8_t tmp[512];
+	int actual_length = 0;
+	do {
+		libusb_bulk_transfer(usbh, ep | LIBUSB_ENDPOINT_IN,
+				tmp, sizeof(tmp), &actual_length, 100);
+	} while (actual_length);
+	sr_dbg("Cleared EP: %u", ep);
 }
 
 #endif

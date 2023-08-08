@@ -20,17 +20,7 @@
 #include <config.h>
 #include "protocol.h"
 
-/* Note: No spaces allowed because of sigrok-cli. */
-static const char *logic_pattern_str[] = {
-	"1ch",
-	"2ch",
-	"4ch",
-	"8ch",
-	// "16ch",
-};
-
 static const uint32_t scanopts[] = {
-	SR_CONF_NUM_LOGIC_CHANNELS,
 	SR_CONF_CONN,
 };
 
@@ -40,15 +30,9 @@ static const uint32_t drvopts[] = {
 
 static const uint32_t devopts[] = {
 	SR_CONF_CONTINUOUS,
-	SR_CONF_CONN | SR_CONF_GET,
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
-	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
-	SR_CONF_TRIGGER_MATCH | SR_CONF_LIST,
-	SR_CONF_CAPTURE_RATIO | SR_CONF_GET | SR_CONF_SET,
-};
-
-static const uint32_t devopts_cg_logic[] = {
-	SR_CONF_PATTERN_MODE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_SAMPLERATE    | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_TRIGGER_MATCH | SR_CONF_GET | SR_CONF_LIST,
 };
 
 static const int32_t trigger_matches[] = {
@@ -59,53 +43,41 @@ static const int32_t trigger_matches[] = {
 	SR_TRIGGER_EDGE,
 };
 
-static const uint64_t samplerates[] = {
-	/* 160M = 2*2*2*2*2*5M */
-	SR_MHZ(1),
-	SR_MHZ(2),
-	SR_MHZ(4),
-	SR_MHZ(5),
-	SR_MHZ(8),
-	SR_MHZ(10),
-	SR_MHZ(16),
-	SR_MHZ(20),
-	SR_MHZ(32),
-	SR_MHZ(40),
-	/* x 4ch */
-	SR_MHZ(64),
-	SR_MHZ(80),
-	/* x 2ch */
-	SR_MHZ(128),
-	SR_MHZ(160),
-};
-
 static struct sr_dev_driver sipeed_slogic_analyzer_driver_info;
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
-	// sr_dbg("Enter func %s with di: %p, options: %p", __func__, di, options);
+	int ret;
+	struct sr_dev_inst *sdi;
+	struct sr_usb_dev_inst *usb;
 	struct drv_context *drvc;
+	struct dev_context *devc;
+
+	struct sr_config *option;
+	struct libusb_device_descriptor des;
 	GSList *devices;
+	GSList *l, *conn_devices;
+	const char *conn;
+	char cbuf[128];
+	char *iManufacturer, *iProduct, *iSerialNumber, *iPortPath;
 
 	(void)options;
 
 	devices = NULL;
 	drvc = di->context;
 	drvc->instances = NULL;
-
-	/* TODO: scan for devices, either based on a SR_CONF_CONN option
+	
+	/* scan for devices, either based on a SR_CONF_CONN option
 	 * or on a USB scan. */
-	const char *conn = NULL;
-	int num_logic_channels = 8;
-	for (GSList *l = options; l; l = l->next) {
-		struct sr_config *src = l->data;
-		switch (src->key) {
-		case SR_CONF_NUM_LOGIC_CHANNELS:
-			num_logic_channels = g_variant_get_int32(src->data);
-			break;
+	for (l = options; l; l = l->next) {
+		option = l->data;
+		switch (option->key) {
 		case SR_CONF_CONN:
-			conn = g_variant_get_string(src->data, NULL);
+			conn = g_variant_get_string(option->data, NULL);
+			sr_info("use conn: %s", conn);
 			break;
+		default:
+			sr_warn("Unhandled option key: %u", option->key);
 		}
 	}
 	
@@ -114,76 +86,69 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	}
 
 	/* Find all slogic compatible devices. */
-	GSList * conn_devices = sr_usb_find(drvc->sr_ctx->libusb_ctx, conn);
-	for(GSList *l = conn_devices; l; l = l->next) {
-		struct sr_usb_dev_inst *usb = l->data;
-		if (SR_OK != sr_usb_open(drvc->sr_ctx->libusb_ctx, usb))
-			continue;
-
-		unsigned char iManufacturer[64], iProduct[64], iSerialNumber[64];
-		unsigned char connection_id[64];
-		struct libusb_device_descriptor des;
-		libusb_get_device_descriptor(libusb_get_device(usb->devhdl), &des);
-		if (libusb_get_string_descriptor_ascii(usb->devhdl,
-				des.iManufacturer, iManufacturer, sizeof(iManufacturer)) < 0)
-			continue;
-		if (libusb_get_string_descriptor_ascii(usb->devhdl,
-				des.iProduct, iProduct, sizeof(iProduct)) < 0)
-			continue;
-		if (libusb_get_string_descriptor_ascii(usb->devhdl,
-				des.iSerialNumber, iSerialNumber, sizeof(iSerialNumber)) < 0)
-			continue;
-		if (usb_get_port_path(libusb_get_device(usb->devhdl),
-				connection_id, sizeof(connection_id)) < 0)
-			continue;
+	conn_devices = sr_usb_find(drvc->sr_ctx->libusb_ctx, conn);
+	for(l = conn_devices; l; l = l->next) {
+		usb = l->data;
+		ret = sr_usb_open(drvc->sr_ctx->libusb_ctx, usb);
+		if (SR_OK != ret) continue;
+		libusb_get_device_descriptor(
+			libusb_get_device(usb->devhdl), &des);
+		libusb_get_string_descriptor_ascii(usb->devhdl,
+				des.iManufacturer, cbuf, sizeof(cbuf));
+		iManufacturer = g_strdup(cbuf);
+		libusb_get_string_descriptor_ascii(usb->devhdl,
+				des.iProduct, cbuf, sizeof(cbuf));
+		iProduct = g_strdup(cbuf);
+		libusb_get_string_descriptor_ascii(usb->devhdl,
+				des.iSerialNumber, cbuf, sizeof(cbuf));
+		iSerialNumber = g_strdup(cbuf);
+		usb_get_port_path(libusb_get_device(usb->devhdl),
+				cbuf, sizeof(cbuf));
+		iPortPath = g_strdup(cbuf);
 		sr_usb_close(usb);
 
-		struct sr_dev_inst *sdi = sr_dev_inst_user_new(iManufacturer, iProduct, NULL);
-		sdi->serial_num = g_strdup(iSerialNumber);
-		sdi->connection_id = g_strdup(connection_id);
+		sdi = sr_dev_inst_user_new(iManufacturer, iProduct, NULL);
+		if (!sdi) continue;
 
+		sdi->serial_num = iSerialNumber;
+		sdi->connection_id = iPortPath;
 		sdi->inst_type = SR_INST_USB;
 		sdi->status = SR_ST_INACTIVE;
 		sdi->conn = usb;
 
-		struct dev_context *devc = g_malloc0(sizeof(struct dev_context));
+		devc = g_malloc0(sizeof(struct dev_context));
 		sdi->priv = devc;
-		devc->profile = NULL;
 
-		if (num_logic_channels > 0) {
-			/* Logic channels, all in one channel group. */
-			struct sr_channel_group *cg = sr_channel_group_new(sdi, "Logic", NULL);
-			for (int i = 0; i < num_logic_channels; i++) {
-				char channel_name[16];
-				sprintf(channel_name, "D%d", i);
-				struct sr_channel *ch = sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, channel_name);
-				cg->channels = g_slist_append(cg->channels, ch);
-			}
+		for (int i = 0; i < 8; i++) {
+			sr_snprintf_ascii(cbuf, sizeof(cbuf), "D%d", i);
+			sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, cbuf);
 		}
 
 		devices = g_slist_append(devices, sdi);
 	}
 	// g_slist_free_full(conn_devices, (GDestroyNotify)sr_usb_dev_inst_free);
 
-	// sr_dbg("Leave func %s", __func__);
 	return std_scan_complete(di, devices);
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
 {
-	// sr_dbg("Enter func %s with sdi: %p", __func__, sdi);
-	(void)sdi;
-
-	/* TODO: get handle from sdi->conn and open it. */
 	int ret;
-	struct sr_usb_dev_inst *usb= sdi->conn;
-	struct dev_context *devc= sdi->priv;
-	struct sr_dev_driver *di = sdi->driver;
-	struct drv_context *drvc = di->context;
+	struct sr_usb_dev_inst *usb;
+	struct dev_context *devc;
+	struct sr_dev_driver *di;
+	struct drv_context *drvc;
+
+
+	if (!sdi) return SR_ERR_DEV_CLOSED;
+	/* TODO: get handle from sdi->conn and open it. */
+	usb  = sdi->conn;
+	devc = sdi->priv;
+	di	 = sdi->driver;
+	drvc = di->context;
 
 	ret = sr_usb_open(drvc->sr_ctx->libusb_ctx, usb);
-	if (ret != SR_OK)
-		return ret;
+	if (SR_OK != ret) return ret;
 
 	ret = libusb_claim_interface(usb->devhdl, 0);
 	if (ret != LIBUSB_SUCCESS) {
@@ -203,208 +168,131 @@ static int dev_open(struct sr_dev_inst *sdi)
 		return SR_ERR;
 	}
 
-	devc->logic_pattern = 3;  /* 2^3 = 8 default */
-	devc->cur_samplerate = samplerates[0];
-	devc->limit_samples = 0;
-	devc->num_frames = 0;
-	devc->limit_frames = 1;
-	devc->capture_ratio = 0;
+	devc_set_samplerate(devc, samplerates[7]);
 	
-	// sr_dbg("Leave func %s", __func__);
 	return std_dummy_dev_open(sdi);
 }
 
 static int dev_close(struct sr_dev_inst *sdi)
 {
-	// sr_dbg("Enter func %s with sdi: %p", __func__, sdi);
-	(void)sdi;
+	int ret;
+	struct sr_usb_dev_inst *usb;
+	struct dev_context *devc;
+	struct sr_dev_driver *di;
+	struct drv_context *drvc;
 
 	/* TODO: get handle from sdi->conn and close it. */
-	int ret;
-	struct sr_usb_dev_inst *usb = sdi->conn;
-	struct dev_context *devc= sdi->priv;
+	usb  = sdi->conn;
+	devc = sdi->priv;
+	di	 = sdi->driver;
+	drvc = di->context;
 
 	ret = libusb_release_interface(usb->devhdl, 0);
 	if (ret != LIBUSB_SUCCESS) {
-		sr_err("Unable to release Interface for %s.",
-			       libusb_error_name(ret));
-		// return SR_ERR;
+		switch (ret) {
+		case LIBUSB_ERROR_NO_DEVICE:
+			sr_err("Device has been disconnected.");
+			// return SR_ERR_DEV_CLOSED;
+			break;
+		default:
+			sr_err("Unable to release Interface for %s.",
+					libusb_error_name(ret));
+			break;
+		}
 	}
-
+	
 	sr_usb_close(usb);
-
-	// sr_dbg("Leave func %s", __func__);
+	
 	return std_dummy_dev_close(sdi);
 }
 
 static int config_get(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	// sr_dbg("Enter func %s with key: %u, data: %p, sdi: %p, cg: %p", __func__, key, data, sdi, cg);
 	int ret;
+	struct dev_context *devc;
 
-	(void)sdi;
-	(void)data;
 	(void)cg;
 
-	struct sr_usb_dev_inst *usb = sdi->conn;
-	struct dev_context *devc= sdi->priv;
-	struct sr_channel *ch;
+	devc = sdi->priv;
+
 	ret = SR_OK;
 	switch (key) {
-	/* TODO */
-	case SR_CONF_CONN:
-		if (usb->address == 0xff)
-			/* Device still needs to re-enumerate after firmware
-			 * upload, so we don't know its (future) address. */
-			return SR_ERR;
-		*data = g_variant_new_printf("%d.%d", usb->bus, usb->address);
-		break;
 	case SR_CONF_SAMPLERATE:
 		*data = g_variant_new_uint64(devc->cur_samplerate);
 		break;
 	case SR_CONF_LIMIT_SAMPLES:
 		*data = g_variant_new_uint64(devc->limit_samples);
 		break;
-	case SR_CONF_PATTERN_MODE:
-		if (!cg)
-			return SR_ERR_CHANNEL_GROUP;
-		/* Any channel in the group will do. */
-		ch = cg->channels->data;
-		if (ch->type == SR_CHANNEL_LOGIC) {
-			int pattern = devc->logic_pattern;
-			*data = g_variant_new_string(logic_pattern_str[pattern]);
-		} else
-			return SR_ERR_BUG;
-		break;
-	case SR_CONF_CAPTURE_RATIO:
-		*data = g_variant_new_uint64(devc->capture_ratio);
-		break;
-	case SR_CONF_VOLTAGE_THRESHOLD:
-		*data = std_gvar_tuple_double(devc->voltage_threshold[0], devc->voltage_threshold[1]);
-		break;
 	default:
 		return SR_ERR_NA;
 	}
 
-	// sr_dbg("Leave func %s", __func__);
 	return ret;
 }
 
 static int config_set(uint32_t key, GVariant *data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	sr_dbg("Enter func %s with key: %u, data: %p, sdi: %p, cg: %p", __func__, key, data, sdi, cg);
 	int ret;
+	struct dev_context *devc;
 
-	(void)sdi;
-	(void)data;
 	(void)cg;
 
-	struct dev_context *devc= sdi->priv;
-	int logic_pattern;
+	devc = sdi->priv;
+
 	ret = SR_OK;
 	switch (key) {
-	/* TODO */
 	case SR_CONF_SAMPLERATE:
-		if (std_u64_idx(data, ARRAY_AND_SIZE(samplerates)) < 0)
-			return SR_ERR_ARG;
-		devc->cur_samplerate = g_variant_get_uint64(data);
-		if (devc->cur_samplerate >= SR_MHZ(128)) {
-			sr_dbg("set 2 ch");
-			sdi->driver->config_set(SR_CONF_PATTERN_MODE,
-				g_variant_new_string(logic_pattern_str[1]),
-				sdi, sdi->channel_groups->data);
-		} else if (devc->cur_samplerate >= SR_MHZ(64)) {
-			sr_dbg("set 4 ch");
-			sdi->driver->config_set(SR_CONF_PATTERN_MODE,
-				g_variant_new_string(logic_pattern_str[2]),
-				sdi, sdi->channel_groups->data);
+		if (std_u64_idx(data, ARRAY_AND_SIZE(samplerates)) < 0) {
+			ret = SR_ERR_ARG;
+		} else {
+			devc_set_samplerate(devc, g_variant_get_uint64(data));
+			{
+			size_t idx = 0;
+				for (GSList *l = sdi->channels; l; l = l->next, idx += 1) {
+					struct sr_channel *ch = l->data;
+					if (ch->type == SR_CHANNEL_LOGIC) { /* Might as well do this now, these are static. */
+						sr_dev_channel_enable(ch, (idx >= devc->cur_samplechannel) ? FALSE : TRUE);
+					} else {
+						return SR_ERR_BUG;
+					}
+				}
+			}
 		}
 		break;
 	case SR_CONF_LIMIT_SAMPLES:
 		devc->limit_samples = g_variant_get_uint64(data);
 		break;
-	case SR_CONF_PATTERN_MODE:
-		if (!cg)
-			return SR_ERR_CHANNEL_GROUP;
-		logic_pattern = std_str_idx(data, ARRAY_AND_SIZE(logic_pattern_str));
-		if (logic_pattern < 0)
-			return SR_ERR_ARG;
-		if (((struct sr_channel *)cg->channels->data)->type == SR_CHANNEL_LOGIC) {
-			// sr_dbg("Setting logic pattern to %s", logic_pattern_str[logic_pattern]);
-			devc->logic_pattern = logic_pattern;
-			/* Might as well do this now, these are static. */
-			size_t idx = 0;
-			for (GSList *l = cg->channels; l; l = l->next, idx += 1) {
-				struct sr_channel *ch = l->data;
-				if (ch->type == SR_CHANNEL_LOGIC) {
-					/* Might as well do this now, these are static. */
-					sr_dev_channel_enable(ch, (idx >= (1 << (devc->logic_pattern))) ? FALSE : TRUE);
-				} else
-					return SR_ERR_BUG;
-			}
-		}
-		break;
-	case SR_CONF_CAPTURE_RATIO:
-		devc->capture_ratio = g_variant_get_uint64(data);
-		break;
-	case SR_CONF_VOLTAGE_THRESHOLD:
-		g_variant_get(data, "(dd)", &devc->voltage_threshold[0], &devc->voltage_threshold[1]);
-		break;
 	default:
 		ret = SR_ERR_NA;
 	}
 
-	// sr_dbg("Leave func %s", __func__);
 	return ret;
 }
 
 static int config_list(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	// sr_dbg("Enter func %s with key: %x, data: %p, sdi: %p, cg: %p", __func__, key, data, sdi, cg);
 	int ret;
 
-	(void)sdi;
-	(void)data;
-	(void)cg;
-
-	struct sr_channel *ch;
 	ret = SR_OK;
 	switch (key) {
 	/* TODO */
 	case SR_CONF_SCAN_OPTIONS:
 	case SR_CONF_DEVICE_OPTIONS:
-		if (!cg)
-			return STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
-		ch = cg->channels->data;
-		if (ch->type == SR_CHANNEL_LOGIC)
-			*data = std_gvar_array_u32(ARRAY_AND_SIZE(devopts_cg_logic));
-		else
-			return SR_ERR_BUG;
+		ret = STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
 		break;
 	case SR_CONF_SAMPLERATE:
 		*data = std_gvar_samplerates(ARRAY_AND_SIZE(samplerates));
 		break;
-	// sr_dbg("Leave func %s", __func__);
 	case SR_CONF_TRIGGER_MATCH:
 		*data = std_gvar_array_i32(ARRAY_AND_SIZE(trigger_matches));
 		break;
-	case SR_CONF_PATTERN_MODE:
-		if (!cg)
-			return SR_ERR_NA;
-		ch = cg->channels->data;
-		if (ch->type == SR_CHANNEL_LOGIC)
-			*data = g_variant_new_strv(ARRAY_AND_SIZE(logic_pattern_str));
-		else
-			return SR_ERR_BUG;
-		break;
 	default:
-		return SR_ERR_NA;
+		ret = SR_ERR_NA;
 	}
 
-	// sr_dbg("Leave func %s", __func__);
 	return ret;
 }
 
