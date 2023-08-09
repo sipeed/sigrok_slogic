@@ -110,19 +110,21 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		sdi = sr_dev_inst_user_new(iManufacturer, iProduct, NULL);
 		if (!sdi) continue;
 
+		for (int i = 0; i < 8; i++) {
+			sr_snprintf_ascii(cbuf, sizeof(cbuf), "D%d", i);
+			sr_dev_inst_channel_add(sdi, i, SR_CHANNEL_LOGIC, cbuf);
+		}
+		
 		sdi->serial_num = iSerialNumber;
 		sdi->connection_id = iPortPath;
-		sdi->inst_type = SR_INST_USB;
 		sdi->status = SR_ST_INACTIVE;
 		sdi->conn = usb;
+		sdi->inst_type = SR_INST_USB;
 
 		devc = g_malloc0(sizeof(struct dev_context));
 		sdi->priv = devc;
 
-		for (int i = 0; i < 8; i++) {
-			sr_snprintf_ascii(cbuf, sizeof(cbuf), "D%d", i);
-			sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, cbuf);
-		}
+
 
 		devices = g_slist_append(devices, sdi);
 	}
