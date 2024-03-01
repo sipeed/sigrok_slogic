@@ -27,7 +27,21 @@
 
 #define LOG_PREFIX "sipeed-slogic"
 
+enum logic_pattern_type {
+    PATTERN_1CH,
+    PATTERN_2CH,
+    PATTERN_4CH,
+    PATTERN_8CH,
+    PATTERN_16CH,
+};
+
+#define LOGIC_PATTERN_TO_CHANNELS(p) (1<<(p))
+
 struct dev_context {
+    enum logic_pattern_type logic_pattern;
+
+
+    enum logic_pattern_type logic_pattern_max;
 };
 
 SR_PRIV int sipeed_slogic_receive_data(int fd, int revents, void *cb_data);
