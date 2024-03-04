@@ -20,24 +20,30 @@
 #include <config.h>
 #include "protocol.h"
 
-SR_PRIV int sipeed_slogic_receive_data(int fd, int revents, void *cb_data)
+SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents, void *cb_data)
 {
 	const struct sr_dev_inst *sdi;
 	struct dev_context *devc;
+	struct drv_context *drvc;
+	struct timeval tv;
 
 	(void)fd;
+	(void)revents;
 
 	sdi = cb_data;
-	if (!sdi)
-		return TRUE;
-
 	devc = sdi->priv;
-	if (!devc)
-		return TRUE;
+	drvc = sdi->driver->context;
 
-	if (revents == G_IO_IN) {
-		/* TODO */
+	if (!devc->running) {
+		usb_source_remove(sdi->session, drvc->sr_ctx);
+		std_session_send_df_end(sdi);
+	} else if (devc->stop_req) {
+		devc->stop_req = false;
+		devc->running = false;
 	}
+
+	tv.tv_sec = tv.tv_usec = 0;
+	libusb_handle_events_timeout(drvc->sr_ctx->libusb_ctx, &tv);
 
 	return TRUE;
 }

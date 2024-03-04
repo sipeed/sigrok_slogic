@@ -328,8 +328,14 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	/* TODO: configure hardware, reset acquisition state, set up
 	 * callbacks and send header packet. */
+	struct dev_context *devc = sdi->priv;
+	devc->stop_req = false;
+	devc->running = true;
+	struct drv_context *drvc = sdi->driver->context;
+	usb_source_add(sdi->session, drvc->sr_ctx, 100, sipeed_slogic_acquisition_handler, sdi);
 
-	(void)sdi;
+	std_session_send_df_header(sdi);
+
 
 	return SR_OK;
 }
@@ -337,8 +343,10 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	/* TODO: stop acquisition. */
-
-	(void)sdi;
+	struct dev_context *devc = sdi->priv;
+	if (devc->running == true) {
+		devc->stop_req = true;
+	}
 
 	return SR_OK;
 }

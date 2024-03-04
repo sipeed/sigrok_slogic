@@ -21,6 +21,7 @@
 #define LIBSIGROK_HARDWARE_SIPEED_SLOGIC_PROTOCOL_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <glib.h>
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
@@ -67,8 +68,13 @@ struct dev_context {
     /* sample */
     uint64_t samplerate;
     uint64_t samplerate_max;
+
+
+    /* working */
+    bool running;
+    bool stop_req;
 };
 
-SR_PRIV int sipeed_slogic_receive_data(int fd, int revents, void *cb_data);
+SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents, void *cb_data);
 
 #endif
