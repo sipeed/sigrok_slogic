@@ -34,7 +34,7 @@ static const uint32_t s_devopts[] = {
 	// SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
 	// SR_CONF_LIMIT_MSEC    | SR_CONF_GET | SR_CONF_SET,
 	// SR_CONF_CAPTURE_RATIO | SR_CONF_GET | SR_CONF_SET,
-	// SR_CONF_SAMPLERATE    | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_SAMPLERATE    | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	// SR_CONF_TRIGGER_MATCH                             | SR_CONF_LIST,
 };
 
@@ -48,6 +48,28 @@ static const char *s_logic_pattern_str[] = {
 	[PATTERN_4CH] = "4ch",
 	[PATTERN_8CH] = "8ch",
 	[PATTERN_16CH] = "16ch",
+};
+
+static const uint64_t s_samplerates_supported[] = {
+	/* 160M = 2*2*2*2*2*5M */
+	/* x 16ch */
+	SR_MHZ(1),
+	SR_MHZ(2),
+	SR_MHZ(5),
+	SR_MHZ(10),
+	SR_MHZ(20),
+	SR_MHZ(50),
+	SR_MHZ(100),
+	SR_MHZ(120),
+	SR_MHZ(150),
+	/* x 8ch */
+	SR_MHZ(200),
+	SR_MHZ(300),
+	/* x 4ch */
+	SR_MHZ(400),
+	SR_MHZ(600),
+	/* x 2ch */
+	SR_MHZ(1200),
 };
 
 static struct sr_dev_driver sipeed_slogic_driver_info;
@@ -109,6 +131,9 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		struct dev_context *devc = g_malloc0(sizeof(struct dev_context));
 
 		devc->logic_pattern_max = PATTERN_16CH;
+		devc->samplerate_max = LOGIC_PATTERN_TO_MAX_SAMPLERATE(PATTERN_16CH); // 150MHZ
+
+		devc->samplerate = devc->samplerate_max;
 
 		devc->logic_pattern = devc->logic_pattern_max;
 		size_t num_logic_channels = LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern);
@@ -165,6 +190,9 @@ static int config_get(uint32_t key, GVariant **data,
 	devc = sdi->priv;
 	switch (key) {
 	/* TODO */
+	case SR_CONF_SAMPLERATE:
+		*data = g_variant_new_uint64(devc->samplerate);
+		break;
 	case SR_CONF_PATTERN_MODE:
 		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
@@ -194,6 +222,13 @@ static int config_set(uint32_t key, GVariant *data,
 	ret = SR_OK;
 	switch (key) {
 	/* TODO */
+	case SR_CONF_SAMPLERATE:
+		devc->samplerate = g_variant_get_uint64(data);
+		if (devc->samplerate > devc->samplerate_max) {
+			GVariant *new_data = g_variant_new_uint64(devc->samplerate_max);
+			sr_config_set(sdi, cg, key, new_data);
+		}
+		break;
 	case SR_CONF_PATTERN_MODE:
 		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
@@ -205,6 +240,7 @@ static int config_set(uint32_t key, GVariant *data,
 			if (logic_pattern < 0)
 				return SR_ERR_ARG;
 			devc->logic_pattern = logic_pattern;
+			devc->samplerate_max = LOGIC_PATTERN_TO_MAX_SAMPLERATE(devc->logic_pattern);
 		} else
 			return SR_ERR_BUG;
 		break;
@@ -226,11 +262,19 @@ static int config_list(uint32_t key, GVariant **data,
 		switch (key) {
 		case SR_CONF_SCAN_OPTIONS:
 		case SR_CONF_DEVICE_OPTIONS:
-			return STD_CONFIG_LIST(key, data, sdi, cg, s_scanopts, s_drvopts, s_devopts);
+			ret = STD_CONFIG_LIST(key, data, sdi, cg, s_scanopts, s_drvopts, s_devopts);
 			break;
-		case SR_CONF_SAMPLERATE:
-			// *data = std_gvar_samplerates_steps(ARRAY_AND_SIZE(samplerates));
-			break;
+		case SR_CONF_SAMPLERATE:{
+			size_t samplerates_supported_max = ARRAY_SIZE(s_samplerates_supported);
+			struct dev_context *devc;
+			if ((devc = sdi->priv)) {
+				GVariant *data = g_variant_new_uint64(devc->samplerate_max);
+				int idx = std_u64_idx(data ,ARRAY_AND_SIZE(s_samplerates_supported));
+				g_variant_unref(data);
+				if (-1 != idx) samplerates_supported_max = idx + 1;
+			}
+			*data = std_gvar_samplerates(s_samplerates_supported, samplerates_supported_max);
+		}break;
 		case SR_CONF_TRIGGER_MATCH:
 			// *data = std_gvar_array_i32(ARRAY_AND_SIZE(trigger_matches));
 			break;

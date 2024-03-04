@@ -37,11 +37,36 @@ enum logic_pattern_type {
 
 #define LOGIC_PATTERN_TO_CHANNELS(p) (1<<(p))
 
+#define LOGIC_PATTERN_TO_MAX_SAMPLERATE(P) \
+    ({                                 \
+        uint64_t __max_sr;               \
+        switch (P) {                     \
+        case PATTERN_1CH:              \
+        case PATTERN_2CH:              \
+            __max_sr = SR_MHZ(1200);     \
+            break;                       \
+        case PATTERN_4CH:              \
+            __max_sr = SR_MHZ(600);      \
+            break;                       \
+        case PATTERN_8CH:              \
+            __max_sr = SR_MHZ(300);      \
+            break;                       \
+        case PATTERN_16CH:             \
+        default:                       \
+            __max_sr = SR_MHZ(150);      \
+            break;                       \
+        }                                \
+        __max_sr;                        \
+    })
+
 struct dev_context {
+    /* configure */
     enum logic_pattern_type logic_pattern;
-
-
     enum logic_pattern_type logic_pattern_max;
+
+    /* sample */
+    uint64_t samplerate;
+    uint64_t samplerate_max;
 };
 
 SR_PRIV int sipeed_slogic_receive_data(int fd, int revents, void *cb_data);
