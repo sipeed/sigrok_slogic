@@ -86,7 +86,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	devices = NULL;
 	conn = NULL;
 	drvc = di->context;
-	drvc->instances = NULL;
 
 	/* scan for devices, either based on a SR_CONF_CONN option
 	 * or on a USB scan. */
@@ -102,7 +101,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 
 	/* TODO: scan for devices, either based on a SR_CONF_CONN option
 	 * or on a USB scan. */
-	GSList *udis = sr_usb_find(drvc->sr_ctx->libusb_ctx, "1d50.608c");
+	GSList *udis = sr_usb_find(drvc->sr_ctx->libusb_ctx, "359f.3001");
 	for (l = udis; l; l = l->next) {
 		struct sr_usb_dev_inst *udi = l->data;
 		if (SR_OK != sr_usb_open(drvc->sr_ctx->libusb_ctx, udi))
@@ -161,19 +160,42 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 
 static int dev_open(struct sr_dev_inst *sdi)
 {
-	(void)sdi;
+	int ret;
+	struct sr_usb_dev_inst *udi = sdi->conn;
+	struct drv_context *drvc = sdi->driver->context;
 
+	ret = SR_OK;
 	/* TODO: get handle from sdi->conn and open it. */
+	ret = sr_usb_open(drvc->sr_ctx->libusb_ctx, udi);
+	if (SR_OK != ret) return ret;
 
-	return SR_OK;
+	// claim interface 0 (the first) of device (mine had jsut 1)
+	ret = libusb_claim_interface(udi->devhdl, 0);
+	if (LIBUSB_SUCCESS != ret) {
+		sr_err("Failed to Claim Interface! %s", libusb_error_name(ret));
+		sr_usb_close(udi);
+		ret = SR_ERR_IO;
+		return ret;
+	}
+
+	return ret;
 }
 
 static int dev_close(struct sr_dev_inst *sdi)
 {
-	(void)sdi;
+	int ret;
+	struct sr_usb_dev_inst *udi = sdi->conn;
 
+	ret = SR_OK;
 	/* TODO: get handle from sdi->conn and close it. */
+	/* Handle sdi->priv */
+	ret = libusb_release_interface(udi->devhdl, 0);
+	if (LIBUSB_SUCCESS != ret) {
+		sr_err("Failed to DeClaim Interface! %s", libusb_error_name(ret));
+		ret = SR_ERR_IO;
+	}
 
+	sr_usb_close(udi);
 	return SR_OK;
 }
 
