@@ -191,6 +191,8 @@ static int config_get(uint32_t key, GVariant **data,
 	switch (key) {
 	/* TODO */
 	case SR_CONF_SAMPLERATE:
+		if (devc->samplerate > devc->samplerate_max)
+			sr_config_set(sdi, cg, key, g_variant_new_uint64(devc->samplerate_max));
 		*data = g_variant_new_uint64(devc->samplerate);
 		break;
 	case SR_CONF_PATTERN_MODE:
@@ -224,10 +226,6 @@ static int config_set(uint32_t key, GVariant *data,
 	/* TODO */
 	case SR_CONF_SAMPLERATE:
 		devc->samplerate = g_variant_get_uint64(data);
-		if (devc->samplerate > devc->samplerate_max) {
-			GVariant *new_data = g_variant_new_uint64(devc->samplerate_max);
-			sr_config_set(sdi, cg, key, new_data);
-		}
 		break;
 	case SR_CONF_PATTERN_MODE:
 		if (!cg)
