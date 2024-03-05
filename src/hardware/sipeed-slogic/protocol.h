@@ -68,6 +68,7 @@ struct dev_context {
     /* sample */
     uint64_t samplerate;
     uint64_t samplerate_max;
+    struct sr_sw_limits sw_limits;
 
 
     /* working */

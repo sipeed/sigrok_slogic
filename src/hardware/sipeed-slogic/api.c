@@ -31,8 +31,9 @@ static const uint32_t s_drvopts[] = {
 
 static const uint32_t s_devopts[] = {
 	SR_CONF_CONTINUOUS,
-	// SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
-	// SR_CONF_LIMIT_MSEC    | SR_CONF_GET | SR_CONF_SET,
+	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
+	SR_CONF_LIMIT_MSEC    | SR_CONF_GET | SR_CONF_SET,
+	SR_CONF_LIMIT_FRAMES  | SR_CONF_GET | SR_CONF_SET,
 	// SR_CONF_CAPTURE_RATIO | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_SAMPLERATE    | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	// SR_CONF_TRIGGER_MATCH                             | SR_CONF_LIST,
@@ -146,7 +147,9 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 				cg->channels = g_slist_append(cg->channels, ch);
 			}
 		}
-		
+
+		sr_sw_limits_init(&devc->sw_limits);
+
 		sdi->status = SR_ST_INACTIVE;
 		sdi->conn = udi;
 		sdi->inst_type = SR_INST_USB;
@@ -222,10 +225,15 @@ static int config_get(uint32_t key, GVariant **data,
 			return SR_ERR_CHANNEL_GROUP;
 		/* Any channel in the group will do. */
 		struct sr_channel *ch = cg->channels->data;
-		if (ch->type == SR_CHANNEL_LOGIC) {
+		if (ch->type == SR_CHANNEL_LOGIC)
 			*data = g_variant_new_string(s_logic_pattern_str[devc->logic_pattern]);
-		} else
+		else
 			return SR_ERR_BUG;
+		break;
+	case SR_CONF_LIMIT_SAMPLES:
+	case SR_CONF_LIMIT_MSEC:
+	case SR_CONF_LIMIT_FRAMES:
+		ret = sr_sw_limits_config_get(&devc->sw_limits, key, data);
 		break;
 	default:
 		return SR_ERR_NA;
@@ -263,6 +271,11 @@ static int config_set(uint32_t key, GVariant *data,
 			devc->samplerate_max = LOGIC_PATTERN_TO_MAX_SAMPLERATE(devc->logic_pattern);
 		} else
 			return SR_ERR_BUG;
+		break;
+	case SR_CONF_LIMIT_SAMPLES:
+	case SR_CONF_LIMIT_MSEC:
+	case SR_CONF_LIMIT_FRAMES:
+		ret = sr_sw_limits_config_set(&devc->sw_limits, key, data);
 		break;
 	default:
 		ret = SR_ERR_NA;
@@ -331,6 +344,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	struct dev_context *devc = sdi->priv;
 	devc->stop_req = false;
 	devc->running = true;
+	sr_sw_limits_acquisition_start(&devc->sw_limits);
 	struct drv_context *drvc = sdi->driver->context;
 	usb_source_add(sdi->session, drvc->sr_ctx, 100, sipeed_slogic_acquisition_handler, sdi);
 
