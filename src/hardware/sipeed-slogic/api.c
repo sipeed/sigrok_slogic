@@ -95,7 +95,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		switch (option->key) {
 		case SR_CONF_CONN:
 			conn = g_variant_get_string(option->data, NULL);
-			sr_info("use conn=%s", conn);
+			sr_info("use conn=%s.", conn);
 			break;
 		}
 	}
@@ -175,7 +175,7 @@ static int dev_open(struct sr_dev_inst *sdi)
 	// claim interface 0 (the first) of device (mine had jsut 1)
 	ret = libusb_claim_interface(udi->devhdl, 0);
 	if (LIBUSB_SUCCESS != ret) {
-		sr_err("Failed to Claim Interface! %s", libusb_error_name(ret));
+		sr_err("Interface claim failed(%s)!.", libusb_error_name(ret));
 		sr_usb_close(udi);
 		ret = SR_ERR_IO;
 		return ret;
@@ -194,7 +194,7 @@ static int dev_close(struct sr_dev_inst *sdi)
 	/* Handle sdi->priv */
 	ret = libusb_release_interface(udi->devhdl, 0);
 	if (LIBUSB_SUCCESS != ret) {
-		sr_err("Failed to DeClaim Interface! %s", libusb_error_name(ret));
+		sr_err("Interface declaim failed(%s)!.", libusb_error_name(ret));
 		ret = SR_ERR_IO;
 	}
 
@@ -339,15 +339,27 @@ static int config_list(uint32_t key, GVariant **data,
 
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
+	uint64_t fps = 30;
 	/* TODO: configure hardware, reset acquisition state, set up
 	 * callbacks and send header packet. */
 	struct dev_context *devc = sdi->priv;
+	devc->logic_fq = feed_queue_logic_alloc(sdi, devc->samplerate/fps,
+		PALIGN_UP(LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern), 8)/8);
+	if(!devc->logic_fq) {
+		sr_err("Logic feed_queue allocate failed.");
+		return SR_ERR_MALLOC;
+	}
 	devc->transfers_submitted = NULL;
 	devc->transfers_ready = NULL;
 	devc->transfers_count = 64;
 	{
-		uint64_t transfer_buffer_size = 256*4096;
-		uint64_t transfer_timeout = 1000;
+		#define MAX_TRANSFER_BUFFER_SIZE (1024*4*1024)
+		uint64_t transfer_buffer_size = PALIGN_DOWN(devc->samplerate/fps*
+						LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern)/8, 4*1024);
+		if (transfer_buffer_size>MAX_TRANSFER_BUFFER_SIZE)
+			transfer_buffer_size=MAX_TRANSFER_BUFFER_SIZE;
+		uint64_t transfer_timeout = devc->sw_limits.limit_samples*1000/devc->samplerate;
+		if (!transfer_timeout) transfer_timeout = 100;
 		uint8_t *transfer_buffer = NULL;
 		for (int i=0; i<devc->transfers_count; i++) {
 			if (!transfer_buffer) transfer_buffer = g_malloc(transfer_buffer_size);
@@ -365,10 +377,10 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		if(transfer_buffer) g_free(transfer_buffer);
 		uint64_t len = g_list_length(devc->transfers_ready);
 		if (!len) {
-			sr_err("Transfer allocate failed");
+			sr_err("Transfer allocate failed.");
 			return SR_ERR_MALLOC;
 		}
-		sr_info("Transfer pre allocated %u x 0x%x bytes", len, transfer_buffer_size);
+		sr_info("Transfer pre allocated %u x 0x%x bytes.", len, transfer_buffer_size);
 		devc->transfers_count = len;
 	}
 	devc->stop_req = false;

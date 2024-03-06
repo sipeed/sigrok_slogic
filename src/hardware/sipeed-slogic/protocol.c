@@ -46,6 +46,9 @@ SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents, void *cb_data
 		g_list_free(devc->transfers_ready);
 		devc->transfers_count = 0;
 
+		feed_queue_logic_flush(devc->logic_fq);
+		feed_queue_logic_free(devc->logic_fq);
+
 		usb_source_remove(sdi->session, drvc->sr_ctx);
 		std_session_send_df_end(sdi);
 	} else if (devc->stop_req) {
@@ -58,7 +61,7 @@ SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents, void *cb_data
 				struct libusb_transfer *transfer = l->data;
 				libusb_cancel_transfer(transfer);
 			}
-			sr_info("Transfer canceled %u", transfers_submitted_count);
+			sr_info("Transfer canceled %u.", transfers_submitted_count);
 			libusb_handle_events_completed(drvc->sr_ctx->libusb_ctx, NULL);
 		}
 	} else {
@@ -68,7 +71,7 @@ SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents, void *cb_data
 			libusb_handle_events_timeout_completed(drvc->sr_ctx->libusb_ctx, &tv, NULL);
 		}
 
-		sr_dbg("Transfer ready/submitted/all=%2u/%2u/%2u",
+		sr_spew("Transfer ready/submitted/all=%2u/%2u/%2u.",
 				g_list_length(devc->transfers_ready),
 				g_list_length(devc->transfers_submitted),
 				devc->transfers_count);
@@ -85,7 +88,7 @@ SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents, void *cb_data
 
 				int ret = libusb_submit_transfer(transfer);
 				if (ret) {
-					sr_warn("Transfer submit failed(%s) will be freed.", libusb_error_name(ret));
+					sr_info("Transfer submit failed(%s) will be freed.", libusb_error_name(ret));
 					g_free(transfer->buffer);
 					libusb_free_transfer(transfer);
 					devc->transfers_ready = g_list_delete_link(devc->transfers_ready, l);
@@ -115,11 +118,14 @@ SR_PRIV void LIBUSB_CALL sipeed_slogic_libusb_transfer_cb(struct libusb_transfer
 	udi  = sdi->conn;
 
 	if (devc->running) {
-		sr_info("Transfer CB: status=%d, length=0x%x", transfer->status, transfer->actual_length);
+		sr_dbg("Transfer CB: status=%d, length=0x%x.", transfer->status, transfer->actual_length);
 		switch (transfer->status) {
-			case LIBUSB_TRANSFER_COMPLETED:
-				sr_sw_limits_update_samples_read(&devc->sw_limits, transfer->actual_length);
-				break;
+			case LIBUSB_TRANSFER_COMPLETED:{
+				uint64_t received_sample_count = transfer->actual_length*8/
+							LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern);
+				feed_queue_logic_submit_many(devc->logic_fq, transfer->buffer, received_sample_count);
+				sr_sw_limits_update_samples_read(&devc->sw_limits, received_sample_count);
+			}break;
 			default:
 				break;
 		}
@@ -130,12 +136,3 @@ SR_PRIV void LIBUSB_CALL sipeed_slogic_libusb_transfer_cb(struct libusb_transfer
 	devc->transfers_submitted = g_list_remove_link(devc->transfers_submitted, l);
 	devc->transfers_ready = g_list_concat(devc->transfers_ready, l);
 }
-
-
-// static const uint64_t get_100ms_packet_size_align_down_to_4k(struct dev_context *devc) {
-// 	uint64_t sr = devc->samplerate;
-// 	uint64_t chns = LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern);
-// 	uint64_t bps = sr*chns;
-// 	// Down to 4K
-// 	return bps/8/10;
-// }

@@ -74,6 +74,7 @@ struct dev_context {
     /* working */
     bool running;
     bool stop_req;
+    struct feed_queue_logic *logic_fq;
     uint64_t transfers_count;
     GSList *transfers_submitted;
     GSList *transfers_ready;
@@ -81,5 +82,8 @@ struct dev_context {
 
 SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents, void *cb_data);
 SR_PRIV void LIBUSB_CALL sipeed_slogic_libusb_transfer_cb(struct libusb_transfer *transfer);
+
+#define PALIGN_DOWN(X, align) ( (X)            & ~((align)-1))
+#define PALIGN_UP(X, align)   (((X)+(align)-1) & ~((align)-1))
 
 #endif
