@@ -342,6 +342,35 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	/* TODO: configure hardware, reset acquisition state, set up
 	 * callbacks and send header packet. */
 	struct dev_context *devc = sdi->priv;
+	devc->transfers_submitted = NULL;
+	devc->transfers_ready = NULL;
+	devc->transfers_count = 64;
+	{
+		uint64_t transfer_buffer_size = 256*4096;
+		uint64_t transfer_timeout = 1000;
+		uint8_t *transfer_buffer = NULL;
+		for (int i=0; i<devc->transfers_count; i++) {
+			if (!transfer_buffer) transfer_buffer = g_malloc(transfer_buffer_size);
+			if (!transfer_buffer) break;
+			struct libusb_transfer *transfer = libusb_alloc_transfer(0);
+			if (!transfer) continue;
+			struct sr_usb_dev_inst *udi = sdi->conn;
+			libusb_fill_bulk_transfer(transfer, udi->devhdl, 0x02 | LIBUSB_ENDPOINT_IN,
+										transfer_buffer, transfer_buffer_size,
+										sipeed_slogic_libusb_transfer_cb,
+										sdi, transfer_timeout);
+			devc->transfers_ready = g_list_append(devc->transfers_ready, transfer);
+			transfer_buffer = NULL;
+		}
+		if(transfer_buffer) g_free(transfer_buffer);
+		uint64_t len = g_list_length(devc->transfers_ready);
+		if (!len) {
+			sr_err("Transfer allocate failed");
+			return SR_ERR_MALLOC;
+		}
+		sr_info("Transfer pre allocated %u x 0x%x bytes", len, transfer_buffer_size);
+		devc->transfers_count = len;
+	}
 	devc->stop_req = false;
 	devc->running = true;
 	sr_sw_limits_acquisition_start(&devc->sw_limits);

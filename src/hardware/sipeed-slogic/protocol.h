@@ -74,8 +74,12 @@ struct dev_context {
     /* working */
     bool running;
     bool stop_req;
+    uint64_t transfers_count;
+    GSList *transfers_submitted;
+    GSList *transfers_ready;
 };
 
 SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents, void *cb_data);
+SR_PRIV void LIBUSB_CALL sipeed_slogic_libusb_transfer_cb(struct libusb_transfer *transfer);
 
 #endif
