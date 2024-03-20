@@ -247,7 +247,6 @@ static int config_set(uint32_t key, GVariant *data,
 {
 	int ret;
 	struct dev_context *devc;
-	GSList *l;
 
 	devc = sdi->priv;
 
@@ -362,7 +361,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		if (!transfer_timeout) transfer_timeout = 100;
 		uint8_t *transfer_buffer = NULL;
 		for (int i=0; i<devc->transfers_count; i++) {
-			if (!transfer_buffer) transfer_buffer = g_malloc(transfer_buffer_size);
+			if (!transfer_buffer) transfer_buffer = g_try_malloc(transfer_buffer_size);
 			if (!transfer_buffer) break;
 			struct libusb_transfer *transfer = libusb_alloc_transfer(0);
 			if (!transfer) continue;
@@ -383,8 +382,8 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		sr_info("Transfer pre allocated %u x 0x%x bytes.", len, transfer_buffer_size);
 		devc->transfers_count = len;
 	}
-	devc->stop_req = false;
-	devc->running = true;
+	devc->stop_req = FALSE;
+	devc->running = TRUE;
 	sr_sw_limits_acquisition_start(&devc->sw_limits);
 	struct drv_context *drvc = sdi->driver->context;
 	usb_source_add(sdi->session, drvc->sr_ctx, 100, sipeed_slogic_acquisition_handler, sdi);
@@ -399,8 +398,8 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	/* TODO: stop acquisition. */
 	struct dev_context *devc = sdi->priv;
-	if (devc->running == true) {
-		devc->stop_req = true;
+	if (devc->running == TRUE) {
+		devc->stop_req = TRUE;
 	}
 
 	return SR_OK;

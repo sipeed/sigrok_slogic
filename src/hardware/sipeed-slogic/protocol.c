@@ -52,8 +52,8 @@ SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents, void *cb_data
 		usb_source_remove(sdi->session, drvc->sr_ctx);
 		std_session_send_df_end(sdi);
 	} else if (devc->stop_req) {
-		devc->stop_req = false;
-		devc->running = false;
+		devc->stop_req = FALSE;
+		devc->running = FALSE;
 		uint64_t transfers_submitted_count = g_list_length(devc->transfers_submitted);
 		// cancel all transfer
 		if (transfers_submitted_count) {

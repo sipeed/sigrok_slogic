@@ -21,7 +21,6 @@
 #define LIBSIGROK_HARDWARE_SIPEED_SLOGIC_PROTOCOL_H
 
 #include <stdint.h>
-#include <stdbool.h>
 #include <glib.h>
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
@@ -72,8 +71,8 @@ struct dev_context {
 
 
     /* working */
-    bool running;
-    bool stop_req;
+    gboolean running;
+    gboolean stop_req;
     struct feed_queue_logic *logic_fq;
     uint64_t transfers_count;
     GSList *transfers_submitted;
