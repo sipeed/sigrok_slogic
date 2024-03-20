@@ -21,7 +21,7 @@
 #include "protocol.h"
 
 static const uint32_t s_scanopts[] = {
-	SR_CONF_CONN,                     // a USB device
+	SR_CONF_CONN, // a USB device
 };
 
 static const uint32_t s_drvopts[] = {
@@ -30,12 +30,11 @@ static const uint32_t s_drvopts[] = {
 };
 
 static const uint32_t s_devopts[] = {
-	SR_CONF_CONTINUOUS,
-	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
-	SR_CONF_LIMIT_MSEC    | SR_CONF_GET | SR_CONF_SET,
-	SR_CONF_LIMIT_FRAMES  | SR_CONF_GET | SR_CONF_SET,
+	SR_CONF_CONTINUOUS, SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
+	SR_CONF_LIMIT_MSEC | SR_CONF_GET | SR_CONF_SET,
+	SR_CONF_LIMIT_FRAMES | SR_CONF_GET | SR_CONF_SET,
 	// SR_CONF_CAPTURE_RATIO | SR_CONF_GET | SR_CONF_SET,
-	SR_CONF_SAMPLERATE    | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	// SR_CONF_TRIGGER_MATCH                             | SR_CONF_LIST,
 };
 
@@ -44,11 +43,8 @@ static const uint32_t s_devopts_cg_logic[] = {
 };
 
 static const char *s_logic_pattern_str[] = {
-	[PATTERN_1CH] = "1ch",
-	[PATTERN_2CH] = "2ch",
-	[PATTERN_4CH] = "4ch",
-	[PATTERN_8CH] = "8ch",
-	[PATTERN_16CH] = "16ch",
+	[PATTERN_1CH] = "1ch", [PATTERN_2CH] = "2ch",	[PATTERN_4CH] = "4ch",
+	[PATTERN_8CH] = "8ch", [PATTERN_16CH] = "16ch",
 };
 
 static const uint64_t s_samplerates_supported[] = {
@@ -110,40 +106,52 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		char *Manufacturer, *Product, *SerialNumber, *Version;
 		char cbuf[128];
 		struct libusb_device_descriptor des;
-		libusb_get_device_descriptor(libusb_get_device(udi->devhdl), &des);
+		libusb_get_device_descriptor(libusb_get_device(udi->devhdl),
+					     &des);
 
-		libusb_get_string_descriptor_ascii(udi->devhdl,
-				des.iManufacturer, cbuf, sizeof(cbuf));
+		libusb_get_string_descriptor_ascii(
+			udi->devhdl, des.iManufacturer, cbuf, sizeof(cbuf));
 		Manufacturer = g_strdup(cbuf);
-		libusb_get_string_descriptor_ascii(udi->devhdl,
-				des.iProduct, cbuf, sizeof(cbuf));
+		libusb_get_string_descriptor_ascii(udi->devhdl, des.iProduct,
+						   cbuf, sizeof(cbuf));
 		Product = g_strdup(cbuf);
-		libusb_get_string_descriptor_ascii(udi->devhdl,
-				des.iSerialNumber, cbuf, sizeof(cbuf));
+		libusb_get_string_descriptor_ascii(
+			udi->devhdl, des.iSerialNumber, cbuf, sizeof(cbuf));
 		SerialNumber = g_strdup(cbuf);
-		sr_snprintf_ascii(cbuf, sizeof(cbuf), "%x.%x", 0xff&(des.bcdDevice>>8), 0xff&(des.bcdDevice>>0));
+		sr_snprintf_ascii(cbuf, sizeof(cbuf), "%x.%x",
+				  0xff & (des.bcdDevice >> 8),
+				  0xff & (des.bcdDevice >> 0));
 		Version = g_strdup(cbuf);
 		sr_usb_close(udi);
 
-		struct sr_dev_inst *sdi = sr_dev_inst_user_new(Manufacturer, Product, Version);
+		struct sr_dev_inst *sdi =
+			sr_dev_inst_user_new(Manufacturer, Product, Version);
 		sdi->serial_num = SerialNumber;
 
-		struct dev_context *devc = g_malloc0(sizeof(struct dev_context));
+		struct dev_context *devc =
+			g_malloc0(sizeof(struct dev_context));
 
 		devc->logic_pattern_max = PATTERN_16CH;
-		devc->samplerate_max = LOGIC_PATTERN_TO_MAX_SAMPLERATE(PATTERN_16CH); // 150MHZ
+		devc->samplerate_max =
+			LOGIC_PATTERN_TO_MAX_SAMPLERATE(PATTERN_16CH); // 150MHZ
 
 		devc->samplerate = devc->samplerate_max;
 
 		devc->logic_pattern = devc->logic_pattern_max;
-		size_t num_logic_channels = LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern);
+		size_t num_logic_channels =
+			LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern);
 		if (num_logic_channels > 0) {
 			/* Logic channels, all in one channel group. */
-			struct sr_channel_group *cg = sr_channel_group_new(sdi, "Logic", NULL);
+			struct sr_channel_group *cg =
+				sr_channel_group_new(sdi, "Logic", NULL);
 			char channel_name[8];
 			for (size_t i = 0; i < num_logic_channels; i++) {
-				sr_snprintf_ascii(channel_name, sizeof(channel_name), "D%d", i);
-				struct sr_channel *ch = sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, channel_name);
+				sr_snprintf_ascii(channel_name,
+						  sizeof(channel_name), "D%d",
+						  i);
+				struct sr_channel *ch =
+					sr_channel_new(sdi, i, SR_CHANNEL_LOGIC,
+						       TRUE, channel_name);
 				cg->channels = g_slist_append(cg->channels, ch);
 			}
 		}
@@ -170,7 +178,8 @@ static int dev_open(struct sr_dev_inst *sdi)
 	ret = SR_OK;
 	/* TODO: get handle from sdi->conn and open it. */
 	ret = sr_usb_open(drvc->sr_ctx->libusb_ctx, udi);
-	if (SR_OK != ret) return ret;
+	if (SR_OK != ret)
+		return ret;
 
 	// claim interface 0 (the first) of device (mine had jsut 1)
 	ret = libusb_claim_interface(udi->devhdl, 0);
@@ -194,7 +203,8 @@ static int dev_close(struct sr_dev_inst *sdi)
 	/* Handle sdi->priv */
 	ret = libusb_release_interface(udi->devhdl, 0);
 	if (LIBUSB_SUCCESS != ret) {
-		sr_err("Interface declaim failed(%s)!.", libusb_error_name(ret));
+		sr_err("Interface declaim failed(%s)!.",
+		       libusb_error_name(ret));
 		ret = SR_ERR_IO;
 	}
 
@@ -203,7 +213,8 @@ static int dev_close(struct sr_dev_inst *sdi)
 }
 
 static int config_get(uint32_t key, GVariant **data,
-	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
+		      const struct sr_dev_inst *sdi,
+		      const struct sr_channel_group *cg)
 {
 	int ret;
 	struct dev_context *devc;
@@ -217,7 +228,9 @@ static int config_get(uint32_t key, GVariant **data,
 	/* TODO */
 	case SR_CONF_SAMPLERATE:
 		if (devc->samplerate > devc->samplerate_max)
-			sr_config_set(sdi, cg, key, g_variant_new_uint64(devc->samplerate_max));
+			sr_config_set(
+				sdi, cg, key,
+				g_variant_new_uint64(devc->samplerate_max));
 		*data = g_variant_new_uint64(devc->samplerate);
 		break;
 	case SR_CONF_PATTERN_MODE:
@@ -226,7 +239,8 @@ static int config_get(uint32_t key, GVariant **data,
 		/* Any channel in the group will do. */
 		struct sr_channel *ch = cg->channels->data;
 		if (ch->type == SR_CHANNEL_LOGIC)
-			*data = g_variant_new_string(s_logic_pattern_str[devc->logic_pattern]);
+			*data = g_variant_new_string(
+				s_logic_pattern_str[devc->logic_pattern]);
 		else
 			return SR_ERR_BUG;
 		break;
@@ -243,7 +257,8 @@ static int config_get(uint32_t key, GVariant **data,
 }
 
 static int config_set(uint32_t key, GVariant *data,
-	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
+		      const struct sr_dev_inst *sdi,
+		      const struct sr_channel_group *cg)
 {
 	int ret;
 	struct dev_context *devc;
@@ -263,11 +278,13 @@ static int config_set(uint32_t key, GVariant *data,
 		ch = cg->channels->data;
 
 		if (ch->type == SR_CHANNEL_LOGIC) {
-			int logic_pattern = std_str_idx(data, ARRAY_AND_SIZE(s_logic_pattern_str));
+			int logic_pattern = std_str_idx(
+				data, ARRAY_AND_SIZE(s_logic_pattern_str));
 			if (logic_pattern < 0)
 				return SR_ERR_ARG;
 			devc->logic_pattern = logic_pattern;
-			devc->samplerate_max = LOGIC_PATTERN_TO_MAX_SAMPLERATE(devc->logic_pattern);
+			devc->samplerate_max = LOGIC_PATTERN_TO_MAX_SAMPLERATE(
+				devc->logic_pattern);
 		} else
 			return SR_ERR_BUG;
 		break;
@@ -284,7 +301,8 @@ static int config_set(uint32_t key, GVariant *data,
 }
 
 static int config_list(uint32_t key, GVariant **data,
-	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
+		       const struct sr_dev_inst *sdi,
+		       const struct sr_channel_group *cg)
 {
 	int ret;
 
@@ -294,37 +312,46 @@ static int config_list(uint32_t key, GVariant **data,
 		switch (key) {
 		case SR_CONF_SCAN_OPTIONS:
 		case SR_CONF_DEVICE_OPTIONS:
-			ret = STD_CONFIG_LIST(key, data, sdi, cg, s_scanopts, s_drvopts, s_devopts);
+			ret = STD_CONFIG_LIST(key, data, sdi, cg, s_scanopts,
+					      s_drvopts, s_devopts);
 			break;
-		case SR_CONF_SAMPLERATE:{
-			size_t samplerates_supported_max = ARRAY_SIZE(s_samplerates_supported);
+		case SR_CONF_SAMPLERATE: {
+			size_t samplerates_supported_max =
+				ARRAY_SIZE(s_samplerates_supported);
 			struct dev_context *devc;
 			if ((devc = sdi->priv)) {
-				GVariant *data = g_variant_new_uint64(devc->samplerate_max);
-				int idx = std_u64_idx(data ,ARRAY_AND_SIZE(s_samplerates_supported));
+				GVariant *data = g_variant_new_uint64(
+					devc->samplerate_max);
+				int idx = std_u64_idx(
+					data, ARRAY_AND_SIZE(
+						      s_samplerates_supported));
 				g_variant_unref(data);
-				if (-1 != idx) samplerates_supported_max = idx + 1;
+				if (-1 != idx)
+					samplerates_supported_max = idx + 1;
 			}
-			*data = std_gvar_samplerates(s_samplerates_supported, samplerates_supported_max);
-		}break;
+			*data = std_gvar_samplerates(s_samplerates_supported,
+						     samplerates_supported_max);
+		} break;
 		case SR_CONF_TRIGGER_MATCH:
 			// *data = std_gvar_array_i32(ARRAY_AND_SIZE(trigger_matches));
 			break;
 		default:
 			return SR_ERR_NA;
 		}
-	} else {                                           // very driver-specific.
+	} else { // very driver-specific.
 		struct sr_channel *ch = cg->channels->data;
 		switch (key) {
 		case SR_CONF_DEVICE_OPTIONS:
 			if (ch->type == SR_CHANNEL_LOGIC)
-				*data = std_gvar_array_u32(ARRAY_AND_SIZE(s_devopts_cg_logic));
+				*data = std_gvar_array_u32(
+					ARRAY_AND_SIZE(s_devopts_cg_logic));
 			else
 				return SR_ERR_BUG;
 			break;
 		case SR_CONF_PATTERN_MODE:
 			if (ch->type == SR_CHANNEL_LOGIC)
-				*data = g_variant_new_strv(ARRAY_AND_SIZE(s_logic_pattern_str));
+				*data = g_variant_new_strv(
+					ARRAY_AND_SIZE(s_logic_pattern_str));
 			else
 				return SR_ERR_BUG;
 			break;
@@ -342,9 +369,11 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	/* TODO: configure hardware, reset acquisition state, set up
 	 * callbacks and send header packet. */
 	struct dev_context *devc = sdi->priv;
-	devc->logic_fq = feed_queue_logic_alloc(sdi, devc->samplerate/fps,
-		PALIGN_UP(LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern), 8)/8);
-	if(!devc->logic_fq) {
+	devc->logic_fq = feed_queue_logic_alloc(
+		sdi, devc->samplerate / fps,
+		PALIGN_UP(LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern), 8) /
+			8);
+	if (!devc->logic_fq) {
 		sr_err("Logic feed_queue allocate failed.");
 		return SR_ERR_MALLOC;
 	}
@@ -352,44 +381,59 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	devc->transfers_ready = NULL;
 	devc->transfers_count = 64;
 	{
-		#define MAX_TRANSFER_BUFFER_SIZE (1024*4*1024)
-		uint64_t transfer_buffer_size = PALIGN_DOWN(devc->samplerate/fps*
-						LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern)/8, 4*1024);
-		if (transfer_buffer_size>MAX_TRANSFER_BUFFER_SIZE)
-			transfer_buffer_size=MAX_TRANSFER_BUFFER_SIZE;
-		uint64_t transfer_timeout = devc->sw_limits.limit_samples*1000/devc->samplerate;
-		if (!transfer_timeout) transfer_timeout = 100;
+#define MAX_TRANSFER_BUFFER_SIZE (1024 * 4 * 1024)
+		uint64_t transfer_buffer_size = PALIGN_DOWN(
+			devc->samplerate / fps *
+				LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern) /
+				8,
+			4 * 1024);
+		if (transfer_buffer_size > MAX_TRANSFER_BUFFER_SIZE)
+			transfer_buffer_size = MAX_TRANSFER_BUFFER_SIZE;
+		uint64_t transfer_timeout =
+			devc->sw_limits.limit_samples * 1000 / devc->samplerate;
+		if (!transfer_timeout)
+			transfer_timeout = 100;
 		uint8_t *transfer_buffer = NULL;
-		for (int i=0; i<devc->transfers_count; i++) {
-			if (!transfer_buffer) transfer_buffer = g_try_malloc(transfer_buffer_size);
-			if (!transfer_buffer) break;
-			struct libusb_transfer *transfer = libusb_alloc_transfer(0);
-			if (!transfer) continue;
+		for (int i = 0; i < devc->transfers_count; i++) {
+			if (!transfer_buffer)
+				transfer_buffer =
+					g_try_malloc(transfer_buffer_size);
+			if (!transfer_buffer)
+				break;
+			struct libusb_transfer *transfer =
+				libusb_alloc_transfer(0);
+			if (!transfer)
+				continue;
 			struct sr_usb_dev_inst *udi = sdi->conn;
-			libusb_fill_bulk_transfer(transfer, udi->devhdl, 0x02 | LIBUSB_ENDPOINT_IN,
-										transfer_buffer, transfer_buffer_size,
-										sipeed_slogic_libusb_transfer_cb,
-										sdi, transfer_timeout);
-			devc->transfers_ready = g_list_append(devc->transfers_ready, transfer);
+			libusb_fill_bulk_transfer(
+				transfer, udi->devhdl,
+				0x02 | LIBUSB_ENDPOINT_IN, transfer_buffer,
+				transfer_buffer_size,
+				sipeed_slogic_libusb_transfer_cb, sdi,
+				transfer_timeout);
+			devc->transfers_ready =
+				g_list_append(devc->transfers_ready, transfer);
 			transfer_buffer = NULL;
 		}
-		if(transfer_buffer) g_free(transfer_buffer);
+		if (transfer_buffer)
+			g_free(transfer_buffer);
 		uint64_t len = g_list_length(devc->transfers_ready);
 		if (!len) {
 			sr_err("Transfer allocate failed.");
 			return SR_ERR_MALLOC;
 		}
-		sr_info("Transfer pre allocated %u x 0x%x bytes.", len, transfer_buffer_size);
+		sr_info("Transfer pre allocated %u x 0x%x bytes.", len,
+			transfer_buffer_size);
 		devc->transfers_count = len;
 	}
 	devc->stop_req = FALSE;
 	devc->running = TRUE;
 	sr_sw_limits_acquisition_start(&devc->sw_limits);
 	struct drv_context *drvc = sdi->driver->context;
-	usb_source_add(sdi->session, drvc->sr_ctx, 100, sipeed_slogic_acquisition_handler, sdi);
+	usb_source_add(sdi->session, drvc->sr_ctx, 100,
+		       sipeed_slogic_acquisition_handler, sdi);
 
 	std_session_send_df_header(sdi);
-
 
 	return SR_OK;
 }

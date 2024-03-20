@@ -28,61 +28,62 @@
 #define LOG_PREFIX "sipeed-slogic"
 
 enum logic_pattern_type {
-    PATTERN_1CH,
-    PATTERN_2CH,
-    PATTERN_4CH,
-    PATTERN_8CH,
-    PATTERN_16CH,
+	PATTERN_1CH,
+	PATTERN_2CH,
+	PATTERN_4CH,
+	PATTERN_8CH,
+	PATTERN_16CH,
 };
 
-#define LOGIC_PATTERN_TO_CHANNELS(p) (1<<(p))
+#define LOGIC_PATTERN_TO_CHANNELS(p) (1 << (p))
 
-#define LOGIC_PATTERN_TO_MAX_SAMPLERATE(P) \
-    ({                                 \
-        uint64_t __max_sr;               \
-        switch (P) {                     \
-        case PATTERN_1CH:              \
-        case PATTERN_2CH:              \
-            __max_sr = SR_MHZ(1200);     \
-            break;                       \
-        case PATTERN_4CH:              \
-            __max_sr = SR_MHZ(600);      \
-            break;                       \
-        case PATTERN_8CH:              \
-            __max_sr = SR_MHZ(300);      \
-            break;                       \
-        case PATTERN_16CH:             \
-        default:                       \
-            __max_sr = SR_MHZ(150);      \
-            break;                       \
-        }                                \
-        __max_sr;                        \
-    })
+#define LOGIC_PATTERN_TO_MAX_SAMPLERATE(P)       \
+	({                                       \
+		uint64_t __max_sr;               \
+		switch (P) {                     \
+		case PATTERN_1CH:                \
+		case PATTERN_2CH:                \
+			__max_sr = SR_MHZ(1200); \
+			break;                   \
+		case PATTERN_4CH:                \
+			__max_sr = SR_MHZ(600);  \
+			break;                   \
+		case PATTERN_8CH:                \
+			__max_sr = SR_MHZ(300);  \
+			break;                   \
+		case PATTERN_16CH:               \
+		default:                         \
+			__max_sr = SR_MHZ(150);  \
+			break;                   \
+		}                                \
+		__max_sr;                        \
+	})
 
 struct dev_context {
-    /* configure */
-    enum logic_pattern_type logic_pattern;
-    enum logic_pattern_type logic_pattern_max;
+	/* configure */
+	enum logic_pattern_type logic_pattern;
+	enum logic_pattern_type logic_pattern_max;
 
-    /* sample */
-    uint64_t samplerate;
-    uint64_t samplerate_max;
-    struct sr_sw_limits sw_limits;
+	/* sample */
+	uint64_t samplerate;
+	uint64_t samplerate_max;
+	struct sr_sw_limits sw_limits;
 
-
-    /* working */
-    gboolean running;
-    gboolean stop_req;
-    struct feed_queue_logic *logic_fq;
-    uint64_t transfers_count;
-    GSList *transfers_submitted;
-    GSList *transfers_ready;
+	/* working */
+	gboolean running;
+	gboolean stop_req;
+	struct feed_queue_logic *logic_fq;
+	uint64_t transfers_count;
+	GSList *transfers_submitted;
+	GSList *transfers_ready;
 };
 
-SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents, void *cb_data);
-SR_PRIV void LIBUSB_CALL sipeed_slogic_libusb_transfer_cb(struct libusb_transfer *transfer);
+SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents,
+					      void *cb_data);
+SR_PRIV void LIBUSB_CALL
+sipeed_slogic_libusb_transfer_cb(struct libusb_transfer *transfer);
 
-#define PALIGN_DOWN(X, align) ( (X)            & ~((align)-1))
-#define PALIGN_UP(X, align)   (((X)+(align)-1) & ~((align)-1))
+#define PALIGN_DOWN(X, align) ((X) & ~((align)-1))
+#define PALIGN_UP(X, align) (((X) + (align)-1) & ~((align)-1))
 
 #endif
