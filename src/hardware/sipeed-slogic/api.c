@@ -131,9 +131,12 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		struct dev_context *devc =
 			g_malloc0(sizeof(struct dev_context));
 
-		devc->logic_pattern_max = PATTERN_16CH;
-		devc->samplerate_max =
-			LOGIC_PATTERN_TO_MAX_SAMPLERATE(PATTERN_16CH); // 150MHZ
+		{ // init
+			devc->logic_pattern_max = PATTERN_16CH;
+			devc->logic_channel_start = 0;
+			devc->samplerate_max = LOGIC_PATTERN_TO_MAX_SAMPLERATE(
+				PATTERN_16CH); // 150MHZ
+		}
 
 		devc->samplerate = devc->samplerate_max;
 
@@ -285,6 +288,23 @@ static int config_set(uint32_t key, GVariant *data,
 			devc->logic_pattern = logic_pattern;
 			devc->samplerate_max = LOGIC_PATTERN_TO_MAX_SAMPLERATE(
 				devc->logic_pattern);
+			{ // enable channels
+				uint64_t logic_channels_start =
+					devc->logic_channel_start;
+				uint64_t num_logic_channels =
+					LOGIC_PATTERN_TO_CHANNELS(
+						devc->logic_pattern);
+
+				struct sr_channel *start_channel;
+				for (GSList *l = cg->channels; l;
+				     l = g_slist_next(l)) {
+					ch = l->data;
+					ch->enabled = FALSE;
+					if (ch->index == logic_channels_start)
+						start_channel = ch;
+				}
+				sr_dev_channel_enable(start_channel, TRUE);
+			}
 		} else
 			return SR_ERR_BUG;
 		break;
@@ -298,6 +318,73 @@ static int config_set(uint32_t key, GVariant *data,
 	}
 
 	return ret;
+}
+
+static int config_channel_set(const struct sr_dev_inst *sdi,
+			      struct sr_channel *ch, unsigned int changes)
+{
+	struct dev_context *devc;
+	devc = sdi->priv;
+
+	if (!(changes & SR_CHANNEL_SET_ENABLED))
+		return SR_OK;
+
+	uint64_t logic_channel_start = devc->logic_channel_start;
+	uint64_t num_logic_channels =
+		LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern);
+	uint64_t max_num_logic_channels =
+		LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern_max);
+	if (logic_channel_start + num_logic_channels > max_num_logic_channels)
+		logic_channel_start =
+			max_num_logic_channels - num_logic_channels;
+
+	if (ch->enabled) {
+		if (ch->index < logic_channel_start)
+			logic_channel_start = ch->index;
+		else if (ch->index >= logic_channel_start + num_logic_channels)
+			logic_channel_start =
+				ch->index + 1 - num_logic_channels;
+	} else {
+		if (ch->index >= logic_channel_start &&
+		    ch->index < logic_channel_start + num_logic_channels) {
+			gboolean place_left = (ch->index - 0) >=
+					      num_logic_channels;
+			gboolean place_right =
+				(max_num_logic_channels - 1 - ch->index) >=
+				num_logic_channels;
+			uint64_t remain_left = ch->index - logic_channel_start;
+			uint64_t remain_right = logic_channel_start +
+						num_logic_channels - 1 -
+						ch->index;
+
+			if (place_right &&
+			    (!place_left || remain_right > remain_left))
+				logic_channel_start = ch->index + 1;
+			else if (place_left)
+				logic_channel_start =
+					ch->index - num_logic_channels;
+		}
+	}
+	sr_dbg("%s %sselected.", ch->name, ch->enabled ? "" : "un");
+
+	devc->logic_channel_start = logic_channel_start;
+
+	struct sr_channel_group *cg = sdi->channel_groups->data;
+	if (g_slist_find(cg->channels, ch)) {
+		for (GSList *l = cg->channels; l; l = g_slist_next(l)) {
+			struct sr_channel *my_ch = l->data;
+			my_ch->enabled =
+				(my_ch->index >= logic_channel_start &&
+				 my_ch->index < logic_channel_start +
+							num_logic_channels) ?
+					TRUE :
+					FALSE;
+		}
+		sr_info("Channel enabled %uch@%u.", num_logic_channels,
+			logic_channel_start);
+	}
+
+	return SR_OK;
 }
 
 static int config_list(uint32_t key, GVariant **data,
@@ -460,6 +547,7 @@ static struct sr_dev_driver sipeed_slogic_driver_info = {
 	.dev_clear = std_dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
+	.config_channel_set = config_channel_set,
 	.config_list = config_list,
 	.dev_open = dev_open,
 	.dev_close = dev_close,

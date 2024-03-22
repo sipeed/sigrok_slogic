@@ -63,6 +63,7 @@ struct dev_context {
 	/* configure */
 	enum logic_pattern_type logic_pattern;
 	enum logic_pattern_type logic_pattern_max;
+	uint64_t logic_channel_start;
 
 	/* sample */
 	uint64_t samplerate;
