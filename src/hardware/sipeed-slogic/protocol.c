@@ -148,9 +148,15 @@ sipeed_slogic_libusb_transfer_cb(struct libusb_transfer *transfer)
 		       transfer->actual_length);
 		switch (transfer->status) {
 		case LIBUSB_TRANSFER_COMPLETED: {
+			uint64_t remain_samples;
+			sr_sw_limits_get_remain(&devc->sw_limits,
+						&remain_samples, NULL, NULL,
+						NULL);
 			uint64_t received_sample_count =
 				transfer->actual_length * 8 /
 				LOGIC_PATTERN_TO_CHANNELS(devc->logic_pattern);
+			if (received_sample_count > remain_samples)
+				received_sample_count = remain_samples;
 			feed_queue_logic_submit_many(devc->logic_fq,
 						     transfer->buffer,
 						     received_sample_count);
