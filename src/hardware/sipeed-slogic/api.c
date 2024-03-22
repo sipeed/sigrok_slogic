@@ -509,9 +509,10 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 			sr_err("Transfer allocate failed.");
 			return SR_ERR_MALLOC;
 		}
-		sr_info("Transfer pre allocated %u x 0x%x bytes.", len,
-			transfer_buffer_size);
+		sr_info("Transfer pre allocated %u x 0x%x bytes with %ums timeout.",
+			len, transfer_buffer_size, transfer_timeout);
 		devc->transfers_count = len;
+		devc->transfers_base_timeout = transfer_timeout;
 	}
 	devc->stop_req = FALSE;
 	devc->running = TRUE;

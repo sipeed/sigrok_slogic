@@ -77,6 +77,7 @@ struct dev_context {
 	uint64_t transfers_count;
 	GSList *transfers_submitted;
 	GSList *transfers_ready;
+	uint64_t transfers_base_timeout;
 };
 
 SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents,

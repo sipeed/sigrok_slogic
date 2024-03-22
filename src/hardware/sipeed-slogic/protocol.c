@@ -97,6 +97,12 @@ SR_PRIV int sipeed_slogic_acquisition_handler(int fd, int revents,
 				uint64_t transfer_timeout =
 					1000; // 4M/300Mi=13.981014ms
 
+				transfer->timeout =
+					(3 +
+					 g_list_length(
+						 devc->transfers_submitted)) *
+					devc->transfers_base_timeout;
+
 				int ret = libusb_submit_transfer(transfer);
 				if (ret) {
 					sr_info("Transfer submit failed(%s) will be freed.",
