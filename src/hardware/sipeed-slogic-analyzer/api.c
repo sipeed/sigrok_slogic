@@ -93,9 +93,11 @@ static struct sr_dev_inst *probe_device(struct sr_scpi_dev_inst *scpi)
 
 	sr_scpi_hw_info_free(hw_info);
 
+
+	devc->cur_samplechannel = 16;
 	// if (devc->model->has_digital) {
 	devc->digital_group = sr_channel_group_new(sdi, "LA", NULL);
-	for (i = 0; i < 16; i++) {
+	for (i = 0; i < devc->cur_samplechannel; i++) {
 		channel_name = g_strdup_printf("D%u", i);
 		ch = sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, channel_name);
 		g_free(channel_name);
@@ -103,6 +105,7 @@ static struct sr_dev_inst *probe_device(struct sr_scpi_dev_inst *scpi)
 			devc->digital_group->channels, ch);
 	}
 	// }
+	devc->cur_samplerate = samplerates[7];
 
 	sdi->priv = devc;
 
@@ -255,6 +258,61 @@ static int config_list(uint32_t key, GVariant **data,
 	return ret;
 }
 
+static int acquisition_start(const struct sr_dev_inst *sdi)
+{
+	struct sr_dev_driver *di;
+	struct dev_context *devc;
+	struct drv_context *drvc;
+
+	devc = sdi->priv;
+	di = sdi->driver;
+	drvc = di->context;
+
+	sr_dbg("acquisition: %u x %u ch@%u MHz",
+		devc->limit_samples,
+		devc->cur_samplechannel, 
+		devc->cur_samplerate / SR_MHZ(1)
+	);
+
+	/* compute needed bytes */
+	devc->bytes_need_transfer = devc->limit_samples * devc->cur_samplechannel / 8;
+
+	// sr_session_source_add(sdi->session, -1 * (size_t)drvc->sr_ctx->libusb_ctx, 0, devc->timeout, handle_events, (void *)sdi);
+	std_session_send_df_header(sdi);
+	std_session_send_df_frame_begin(sdi);
+
+	{
+		size_t len = 32;
+		uint16_t *ptr = g_malloc(len);
+
+		for(size_t i=0; i<len/2; i+=1) {
+			ptr[i] = i << 6;
+		}
+
+		struct sr_datafeed_logic logic = {
+			.length = len,
+			.unitsize = 2,
+			.data = ptr,
+		};
+	
+		struct sr_datafeed_packet packet = {
+			.type = SR_DF_LOGIC,
+			.payload = &logic
+		};
+	
+		sr_session_send(sdi, &packet);
+		g_free(ptr);
+	}
+
+	return SR_OK;
+}
+
+static int acquisition_stop(struct sr_dev_inst *sdi) {
+	// sr_session_source_remove(sdi->session, -1 * (size_t)drvc->sr_ctx->libusb_ctx);
+	std_session_send_df_end(sdi);
+	return SR_OK;
+}
+
 static struct sr_dev_driver sipeed_slogic_analyzer_driver_info = {
 	.name = "sipeed-slogic-analyzer",
 	.longname = "Sipeed Slogic Analyzer",
@@ -269,8 +327,8 @@ static struct sr_dev_driver sipeed_slogic_analyzer_driver_info = {
 	.config_list = config_list,
 	.dev_open = dev_open,
 	.dev_close = dev_close,
-	.dev_acquisition_start = std_dummy_dev_acquisition_start,
-	.dev_acquisition_stop = std_dummy_dev_acquisition_stop,
+	.dev_acquisition_start = acquisition_start,
+	.dev_acquisition_stop = acquisition_stop,
 	.context = NULL,
 };
 SR_REGISTER_DEV_DRIVER(sipeed_slogic_analyzer_driver_info);
