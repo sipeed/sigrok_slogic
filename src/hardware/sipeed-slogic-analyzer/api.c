@@ -19,6 +19,7 @@
 
 #include <config.h>
 #include "protocol.h"
+#include "scpi.h"
 
 static const uint32_t scanopts[] = {
 	SR_CONF_CONN,
@@ -32,7 +33,7 @@ static const uint32_t devopts[] = {
 	SR_CONF_CONTINUOUS,
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_SAMPLERATE    | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
-	SR_CONF_TRIGGER_MATCH | SR_CONF_GET | SR_CONF_LIST,
+	// SR_CONF_TRIGGER_MATCH | SR_CONF_GET | SR_CONF_LIST,
 };
 
 static const int32_t trigger_matches[] = {
@@ -45,169 +46,123 @@ static const int32_t trigger_matches[] = {
 
 static struct sr_dev_driver sipeed_slogic_analyzer_driver_info;
 
+static struct sr_dev_inst *probe_device(struct sr_scpi_dev_inst *scpi)
+{
+	struct dev_context *devc;
+	struct sr_dev_inst *sdi;
+	struct sr_scpi_hw_info *hw_info;
+	struct sr_channel *ch;
+	unsigned int i;
+	gchar *channel_name;
+
+	if (sr_scpi_get_hw_id(scpi, &hw_info) != SR_OK) {
+		sr_err("Couldn't get IDN response.");
+		return NULL;
+	}
+
+	// model = NULL;
+	// for (i = 0; i < ARRAY_SIZE(supported_models); i++) {
+	// 	if (!strcmp(hw_info->model, supported_models[i].name)) {
+	// 		model = &supported_models[i];
+	// 		break;
+	// 	}
+	// }
+
+	// if (!model) {
+	// 	sr_scpi_hw_info_free(hw_info);
+	// 	return NULL;
+	// }
+
+	// sr_dbg("Setting Communication Headers to off.");
+	// if (sr_scpi_send(scpi, "CHDR OFF") != SR_OK)
+	// 	return NULL;
+
+	// sdi = g_malloc0(sizeof(struct sr_dev_inst));
+	// sdi->vendor = g_strdup(model->series->vendor->name);
+	// sdi->model = g_strdup(model->name);
+	// sdi->version = g_strdup(hw_info->firmware_version);
+	sdi = sr_dev_inst_user_new(hw_info->manufacturer, hw_info->model, hw_info->firmware_version);
+	sdi->serial_num = g_strdup(hw_info->serial_number);
+	sdi->inst_type = SR_INST_SCPI;
+	sdi->conn = scpi;
+	sdi->status = SR_ST_INACTIVE;
+	sdi->driver = &sipeed_slogic_analyzer_driver_info;
+	devc = g_malloc0(sizeof(struct dev_context));
+	// devc->limit_frames = 1;
+	// devc->model = model;
+
+	sr_scpi_hw_info_free(hw_info);
+
+	// if (devc->model->has_digital) {
+	devc->digital_group = sr_channel_group_new(sdi, "LA", NULL);
+	for (i = 0; i < 16; i++) {
+		channel_name = g_strdup_printf("D%u", i);
+		ch = sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, channel_name);
+		g_free(channel_name);
+		devc->digital_group->channels = g_slist_append(
+			devc->digital_group->channels, ch);
+	}
+	// }
+
+	sdi->priv = devc;
+
+	return sdi;
+}
+
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
-	int ret;
-	struct sr_dev_inst *sdi;
-	struct sr_usb_dev_inst *usb;
-	struct drv_context *drvc;
-	struct dev_context *devc;
-
+	GSList *l, *devices;
 	struct sr_config *option;
-	struct libusb_device_descriptor des;
-	GSList *devices;
-	GSList *l, *conn_devices;
 	const char *conn;
-	char cbuf[128];
-	char *iManufacturer, *iProduct, *iSerialNumber, *iPortPath;
-
-	(void)options;
+	static const char *conn_default = "tcp-raw/127.0.0.1/21129";
 
 	conn = NULL;
-
-	devices = NULL;
-	drvc = di->context;
-	drvc->instances = NULL;
-	
-	/* scan for devices, either based on a SR_CONF_CONN option
-	 * or on a USB scan. */
 	for (l = options; l; l = l->next) {
 		option = l->data;
 		switch (option->key) {
 		case SR_CONF_CONN:
 			conn = g_variant_get_string(option->data, NULL);
-			sr_info("use conn: %s", conn);
 			break;
 		default:
 			sr_warn("Unhandled option key: %u", option->key);
 		}
 	}
-	
-	if(!conn) {
-		conn = "359f.3031";
+	if (!conn) {
+		conn = conn_default;
+		sr_info("Added default conn: %s.", conn);
+		option = g_malloc0(sizeof(struct sr_config));
+		option->key = SR_CONF_CONN;
+		option->data = g_variant_new_take_string(g_strdup(conn)); // need to be freed
+		options = g_slist_prepend(options, option);
 	}
 
-	/* Find all slogic compatible devices. */
-	conn_devices = sr_usb_find(drvc->sr_ctx->libusb_ctx, conn);
-	for(l = conn_devices; l; l = l->next) {
-		usb = l->data;
-		ret = sr_usb_open(drvc->sr_ctx->libusb_ctx, usb);
-		if (SR_OK != ret) continue;
-		libusb_get_device_descriptor(
-			libusb_get_device(usb->devhdl), &des);
-		libusb_get_string_descriptor_ascii(usb->devhdl,
-				des.iManufacturer, cbuf, sizeof(cbuf));
-		iManufacturer = g_strdup(cbuf);
-		libusb_get_string_descriptor_ascii(usb->devhdl,
-				des.iProduct, cbuf, sizeof(cbuf));
-		iProduct = g_strdup(cbuf);
-		libusb_get_string_descriptor_ascii(usb->devhdl,
-				des.iSerialNumber, cbuf, sizeof(cbuf));
-		iSerialNumber = g_strdup(cbuf);
-		usb_get_port_path(libusb_get_device(usb->devhdl),
-				cbuf, sizeof(cbuf));
-		iPortPath = g_strdup(cbuf);
-		sr_usb_close(usb);
+	devices = sr_scpi_scan(di->context, options, probe_device);
 
-		sdi = sr_dev_inst_user_new(iManufacturer, iProduct, NULL);
-		if (!sdi) continue;
-
-		for (int i = 0; i < 16; i++) {
-			sr_snprintf_ascii(cbuf, sizeof(cbuf), "D%d", i);
-			sr_dev_inst_channel_add(sdi, i, SR_CHANNEL_LOGIC, cbuf);
-		}
-		
-		sdi->serial_num = iSerialNumber;
-		sdi->connection_id = iPortPath;
-		sdi->status = SR_ST_INACTIVE;
-		sdi->conn = usb;
-		sdi->inst_type = SR_INST_USB;
-
-		devc = g_malloc0(sizeof(struct dev_context));
-		sdi->priv = devc;
-
-
-
-		devices = g_slist_append(devices, sdi);
+	if (option == options->data) {
+		g_variant_unref(option->data); // release GVariant，also free str
+		g_free(option);
 	}
-	// g_slist_free_full(conn_devices, (GDestroyNotify)sr_usb_dev_inst_free);
 
-	return std_scan_complete(di, devices);
+	return devices;
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
 {
 	int ret;
-	struct sr_usb_dev_inst *usb;
-	struct dev_context *devc;
-	struct sr_dev_driver *di;
-	struct drv_context *drvc;
+	struct sr_scpi_dev_inst *scpi = sdi->conn;
+	struct dev_context *devc = sdi->priv;
 
-
-	if (!sdi) return SR_ERR_DEV_CLOSED;
-	/* TODO: get handle from sdi->conn and open it. */
-	usb  = sdi->conn;
-	devc = sdi->priv;
-	di	 = sdi->driver;
-	drvc = di->context;
-
-	ret = sr_usb_open(drvc->sr_ctx->libusb_ctx, usb);
-	if (SR_OK != ret) return ret;
-
-	ret = libusb_claim_interface(usb->devhdl, 0);
-	if (ret != LIBUSB_SUCCESS) {
-		switch (ret) {
-		case LIBUSB_ERROR_BUSY:
-			sr_err("Unable to claim USB interface. Another "
-			       "program or driver has already claimed it.");
-			break;
-		case LIBUSB_ERROR_NO_DEVICE:
-			sr_err("Device has been disconnected.");
-			break;
-		default:
-			sr_err("Unable to claim interface: %s.",
-			       libusb_error_name(ret));
-			break;
-		}
+	if ((ret = sr_scpi_open(scpi)) < 0) {
+		sr_err("Failed to open SCPI device: %s.", sr_strerror(ret));
 		return SR_ERR;
 	}
 
-	devc_set_samplerate(devc, samplerates[7]);
-	
-	return std_dummy_dev_open(sdi);
+	return SR_OK;
 }
 
 static int dev_close(struct sr_dev_inst *sdi)
 {
-	int ret;
-	struct sr_usb_dev_inst *usb;
-	struct dev_context *devc;
-	struct sr_dev_driver *di;
-	struct drv_context *drvc;
-
-	/* TODO: get handle from sdi->conn and close it. */
-	usb  = sdi->conn;
-	devc = sdi->priv;
-	di	 = sdi->driver;
-	drvc = di->context;
-
-	ret = libusb_release_interface(usb->devhdl, 0);
-	if (ret != LIBUSB_SUCCESS) {
-		switch (ret) {
-		case LIBUSB_ERROR_NO_DEVICE:
-			sr_err("Device has been disconnected.");
-			// return SR_ERR_DEV_CLOSED;
-			break;
-		default:
-			sr_err("Unable to release Interface for %s.",
-					libusb_error_name(ret));
-			break;
-		}
-	}
-	
-	sr_usb_close(usb);
-	
-	return std_dummy_dev_close(sdi);
+	return sr_scpi_close(sdi->conn);
 }
 
 static int config_get(uint32_t key, GVariant **data,
@@ -229,7 +184,7 @@ static int config_get(uint32_t key, GVariant **data,
 		*data = g_variant_new_uint64(devc->limit_samples);
 		break;
 	default:
-		return SR_ERR_NA;
+		ret = SR_ERR_NA;
 	}
 
 	return ret;
@@ -251,18 +206,18 @@ static int config_set(uint32_t key, GVariant *data,
 		if (std_u64_idx(data, ARRAY_AND_SIZE(samplerates)) < 0) {
 			ret = SR_ERR_ARG;
 		} else {
-			devc_set_samplerate(devc, g_variant_get_uint64(data));
-			{
-			size_t idx = 0;
-				for (GSList *l = sdi->channels; l; l = l->next, idx += 1) {
-					struct sr_channel *ch = l->data;
-					if (ch->type == SR_CHANNEL_LOGIC) { /* Might as well do this now, these are static. */
-						sr_dev_channel_enable(ch, (idx >= devc->cur_samplechannel) ? FALSE : TRUE);
-					} else {
-						return SR_ERR_BUG;
-					}
-				}
-			}
+			devc->cur_samplerate = g_variant_get_uint64(data);
+			// {
+			// size_t idx = 0;
+			// 	for (GSList *l = sdi->channels; l; l = l->next, idx += 1) {
+			// 		struct sr_channel *ch = l->data;
+			// 		if (ch->type == SR_CHANNEL_LOGIC) { /* Might as well do this now, these are static. */
+			// 			sr_dev_channel_enable(ch, (idx >= devc->cur_samplechannel) ? FALSE : TRUE);
+			// 		} else {
+			// 			return SR_ERR_BUG;
+			// 		}
+			// 	}
+			// }
 		}
 		break;
 	case SR_CONF_LIMIT_SAMPLES:
@@ -314,8 +269,8 @@ static struct sr_dev_driver sipeed_slogic_analyzer_driver_info = {
 	.config_list = config_list,
 	.dev_open = dev_open,
 	.dev_close = dev_close,
-	.dev_acquisition_start = sipeed_slogic_acquisition_start,
-	.dev_acquisition_stop = sipeed_slogic_acquisition_stop,
+	.dev_acquisition_start = std_dummy_dev_acquisition_start,
+	.dev_acquisition_stop = std_dummy_dev_acquisition_stop,
 	.context = NULL,
 };
 SR_REGISTER_DEV_DRIVER(sipeed_slogic_analyzer_driver_info);

@@ -57,6 +57,9 @@ static const uint64_t samplerates[] = {
 };
 
 struct dev_context {
+	struct sr_channel_group *digital_group;
+
+
 	struct {
 		uint64_t limit_samples;
 		uint64_t cur_samplerate;
